@@ -1,0 +1,207 @@
+{
+  "name": "AI Infra",
+  "version": 2,
+  "fields": [
+    "title",
+    "abstract",
+    "summary",
+    "keywords"
+  ],
+  "strong_keywords": {
+    "systems": [
+      "AI infrastructure",
+      "ML infrastructure",
+      "machine learning systems",
+      "ML systems",
+      "LLM systems",
+      "MLSys"
+    ],
+    "inference": [
+      "inference serving",
+      "model serving",
+      "LLM serving",
+      "inference engine",
+      "inference optimization",
+      "inference acceleration",
+      "distributed inference",
+      "disaggregated inference",
+      "continuous batching",
+      "speculative decoding"
+    ],
+    "memory": [
+      "KV cache",
+      "KV-cache",
+      "PagedAttention",
+      "paged attention",
+      "prefix caching",
+      "prompt caching",
+      "activation offloading"
+    ],
+    "training": [
+      "distributed training",
+      "data parallelism",
+      "tensor parallelism",
+      "pipeline parallelism",
+      "sequence parallelism",
+      "context parallelism",
+      "expert parallelism",
+      "fully sharded data parallel",
+      "FSDP",
+      "ZeRO optimizer",
+      "ZeRO optimization",
+      "ZeRO-Offload",
+      "ZeRO-Infinity",
+      "ZeRO-1",
+      "ZeRO-2",
+      "ZeRO-3",
+      "gradient accumulation",
+      "activation checkpointing",
+      "gradient checkpointing"
+    ],
+    "communication": [
+      "communication-efficient training",
+      "GPU interconnect",
+      "NCCL",
+      "NVLink"
+    ],
+    "compiler": [
+      "ML compiler",
+      "tensor compiler",
+      "GPU kernel",
+      "FlashAttention",
+      "FlashInfer"
+    ],
+    "hardware": [
+      "AI accelerator",
+      "neural network accelerator",
+      "tensor core",
+      "quantized inference"
+    ],
+    "scheduling": [
+      "GPU scheduling",
+      "GPU sharing",
+      "GPU virtualization"
+    ],
+    "data": [
+      "training data pipeline"
+    ],
+    "moe": [
+      "expert placement",
+      "expert offloading"
+    ],
+    "frameworks": [
+      "vLLM",
+      "SGLang",
+      "TensorRT",
+      "TensorRT-LLM",
+      "DeepSpeed",
+      "Megatron-LM",
+      "llama.cpp",
+      "ONNX Runtime",
+      "Ray Serve",
+      "Alpa"
+    ]
+  },
+  "contextual_keywords": {
+    "systems": [
+      "AI systems"
+    ],
+    "inference": [
+      "prefill",
+      "decode",
+      "dynamic batching",
+      "throughput",
+      "latency"
+    ],
+    "memory": [
+      "memory management",
+      "memory bandwidth",
+      "memory footprint",
+      "memory offloading"
+    ],
+    "communication": [
+      "collective communication",
+      "all-reduce",
+      "all-gather",
+      "reduce-scatter",
+      "communication overlap",
+      "RDMA",
+      "all-to-all communication"
+    ],
+    "compiler": [
+      "graph compiler",
+      "kernel optimization",
+      "kernel fusion",
+      "operator fusion",
+      "code generation",
+      "autotuning",
+      "Triton",
+      "TVM",
+      "MLIR",
+      "XLA"
+    ],
+    "hardware": [
+      "GPU architecture",
+      "TPU",
+      "NPU",
+      "mixed precision",
+      "low precision",
+      "FP8",
+      "FP4",
+      "INT8",
+      "INT4",
+      "quantization"
+    ],
+    "scheduling": [
+      "cluster scheduling",
+      "resource allocation",
+      "resource scheduling",
+      "load balancing",
+      "autoscaling",
+      "multi-tenant",
+      "multi-tenancy",
+      "fault tolerance",
+      "straggler",
+      "checkpointing"
+    ],
+    "data": [
+      "data loading",
+      "data ingestion",
+      "distributed checkpointing",
+      "checkpoint storage",
+      "distributed storage",
+      "I/O bottleneck"
+    ],
+    "moe": [
+      "mixture of experts",
+      "mixture-of-experts",
+      "MoE",
+      "expert routing"
+    ]
+  },
+  "ai_context_keywords": [
+    "LLM",
+    "LLMs",
+    "large language model",
+    "large language models",
+    "language model",
+    "language models",
+    "machine learning",
+    "deep learning",
+    "neural network",
+    "neural networks",
+    "transformer",
+    "transformers",
+    "diffusion model",
+    "diffusion models"
+  ],
+  "exclude_keywords": [],
+  "ai_filter": {
+    "prompt_file": "prompts/ai_infra_filter.md",
+    "keep_decisions": [
+      "keep",
+      "uncertain"
+    ],
+    "human_review_required": true
+  }
+}

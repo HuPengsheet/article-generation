@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>论文选题工作台 · AI Infra</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><div><span class="eyebrow">AI INFRA · DAILY RESEARCH</span><h1>论文选题工作台</h1><p>把一天的新论文，整理成值得深入阅读的技术选题。</p></div><span id="model-status" class="pill">正在连接</span></header>
+    <section class="workflow" aria-label="工作流程">
+      <div><span>01</span><strong>全量采集</strong><small id="count-total">0 篇</small></div>
+      <div><span>02</span><strong>关键词过滤</strong><small id="count-keywords">0 篇</small></div>
+      <div><span>03</span><strong>AI 筛选</strong><small id="count-ai_keep">0 篇候选</small></div>
+      <div><span>04</span><strong>人工选题</strong><small id="count-selected">0 篇选中</small></div>
+      <div><span>05</span><strong>文章草稿</strong><small id="count-articles">0 篇</small></div>
+    </section>
+    <section class="toolbar">
+      <label>公告批次 <select id="batch"><option value="">尚无论文</option></select></label>
+      <button data-action="collect" class="primary">采集最新一天</button>
+      <button data-action="filter">重跑关键词</button>
+      <button data-action="ai">运行 AI 筛选</button>
+      <button data-action="generate">生成选中文章</button>
+      <a id="export" class="button hidden">导出全部记录</a>
+    </section>
+    <p class="hint">采集全部学科的新论文，再按 AI Infra 规则筛选。公告日取自 arXiv；重新采集可续跑，AI 筛选会跳过已成功处理的论文。</p>
+    <div id="job" role="status" class="job hidden"></div>
+    <div id="error" role="alert" class="error hidden"></div>
+    <section class="filters">
+      <label>查看 <select id="stage"><option value="keywords">关键词通过</option><option value="candidate">人工候选</option><option value="ai_pending">待 AI 筛选 / 失败</option><option value="selected">已选中</option><option value="later">稍后看</option><option value="skipped">已跳过</option><option value="articles">已生成文章</option><option value="rejected">AI 排除</option><option value="all">全部论文</option></select></label>
+      <input id="search" type="search" placeholder="搜索标题、摘要或 arXiv ID" aria-label="搜索论文">
+      <label>排序 <select id="sort"><option value="score">AI 相关性</option><option value="id">arXiv ID</option></select></label>
+      <span id="result-count"></span>
+    </section>
+    <div id="papers"><div class="empty">先采集一天的论文。配置模型后，即可完成 AI 筛选和文章生成。</div></div>
+    <div class="pagination"><button id="previous">上一页</button><span id="page-label"></span><button id="next">下一页</button></div>
+    <footer>所有筛选记录保存在本地。文章是基于全文的 AI 草稿，请核对证据后再发布。</footer>
+  </main>
+  <dialog id="article-dialog"><div class="dialog-bar"><strong>技术文章草稿</strong><a id="preview-article" class="button" target="_blank" rel="noopener">公众号预览</a><a id="download-article" class="button">下载 Markdown</a><button id="close-article">关闭</button></div><pre id="article-text"></pre></dialog>
+</body>
+</html>
