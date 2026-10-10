@@ -6,8 +6,8 @@ import shutil
 import sqlite3
 from pathlib import Path
 
-from pipeline.articles import safe_id
-from pipeline.writing import article_images
+from generator.identifiers import safe_id
+from generator.writer import article_images
 
 
 def migrate(data_dir, reports_dir):

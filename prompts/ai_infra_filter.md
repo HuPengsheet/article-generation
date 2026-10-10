@@ -14,6 +14,7 @@
 {
   "id": "输入论文的原始 ID",
   "decision": "keep / reject / uncertain 三者之一",
+  "title_zh": "忠实翻译的中文标题",
   "relevance_score": 0,
   "topics": ["推理服务"],
   "summary_zh": "用中文简述论文解决的问题和方法",

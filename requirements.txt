@@ -4,3 +4,4 @@ pypdf>=5,<7
 python-dotenv>=1,<2
 markdown-it-py>=3,<5
 pymupdf>=1.24,<2
+readability-lxml>=0.8,<1

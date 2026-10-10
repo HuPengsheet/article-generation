@@ -10,6 +10,9 @@ import app as app_module
 import pipeline.articles as articles
 import pipeline.arxiv as arxiv
 import pipeline.figures as figures
+from generator import pdf_text, writer
+from generator.evidence import NOTES_PROMPT as GENERIC_NOTES_PROMPT
+from generator.sources import url as url_source
 from pipeline.llm import LLM, validate_filter
 from scripts.filter_papers import evaluate
 
@@ -70,6 +73,51 @@ class TestModel:
                 "evidence": ["We optimize inference serving."],
                 "limitations": "摘要没有具体实验数字。",
             }
+        if system == GENERIC_NOTES_PROMPT:
+            blocks = json.loads(user)
+            return {
+                "facts": [
+                    {
+                        "claim": "优化推理服务。",
+                        "ref": blocks[0]["ref"],
+                        "quote": "We optimize inference serving.",
+                    }
+                ],
+                "limitations": [],
+            }
+        if system == writer.GENERIC_OUTLINE_PROMPT:
+            evidence = json.loads(user)
+            return {
+                "title": "推理服务优化",
+                "sections": [
+                    {
+                        "heading": heading,
+                        "goal": "解释具体机制",
+                        "fact_refs": [evidence["facts"][0]["ref"]],
+                        "figures": [f["file"] for f in evidence["figures"][:1]]
+                        if index == 1
+                        else [],
+                        "transition": "承接前文问题",
+                    }
+                    for index, heading in enumerate(
+                        ["服务负载", "计算机制", "实验条件", "性能边界"]
+                    )
+                ],
+            }
+        if system == writer.GENERIC_REVIEW_PROMPT:
+            return {"issues": []}
+        if system in (writer.GENERIC_ARTICLE_PROMPT, writer.GENERIC_REWRITE_PROMPT):
+            evidence = json.loads(user)
+            image = (
+                "\n\n![图1：服务机制](" + evidence["figures"][0]["file"] + ")"
+                if evidence.get("figures")
+                else ""
+            )
+            return (
+                "# 推理服务优化\n\n论文研究推理服务优化 [S1:B1]。"
+                + image
+                + "\n\n## 性能边界\n\n分析：需要结合实际负载验证。"
+            )
         if system == articles.OUTLINE_PROMPT:
             evidence = json.loads(user)
             files = [f["file"] for f in evidence["figures"][:1]]
@@ -216,6 +264,7 @@ def test_end_to_end_collect_filter_review_article_export_and_resume(
         app_module, "collect", lambda *args: ("2026-10-07", [paper], {"complete": True})
     )
     monkeypatch.setattr(articles, "request_bytes", lambda url: pdf_bytes())
+    monkeypatch.setattr(url_source, "fetch", lambda url: {"content": pdf_bytes()})
     monkeypatch.setattr(figures, "request_bytes", lambda url: source_tar())
     application = app_module.create_app(tmp_path, TestModel())
     client = application.test_client()
@@ -252,8 +301,8 @@ def test_end_to_end_collect_filter_review_article_export_and_resume(
         "/api/article", query_string={"batch": batch, "id": paper["id"]}
     ).get_json()["article"]
     assert "[PDF p." not in article["markdown"]
-    assert article["notes"]["citations"][0]["pages"] == [1]
-    assert article["notes"]["page_count"] == 1
+    assert article["notes"]["citations"][0]["refs"] == ["S1:B1"]
+    assert article["notes"]["sections"][0]["location"] == "PDF p.1"
     assert article["notes"]["writing_options"]["include_summary"] is False
     assert article["notes"]["team_context"]["description"] == "调用者核实的团队背景"
     assert article["notes"]["figures"] and article["notes"]["outline"]
@@ -347,7 +396,7 @@ def test_pdf_extraction_warnings_are_preserved(monkeypatch):
     page = Mock()
     page.extract_text.side_effect = extract
     reader = Mock(pages=[page])
-    monkeypatch.setattr(articles, "PdfReader", lambda *args: reader)
+    monkeypatch.setattr(pdf_text, "PdfReader", lambda *args: reader)
     pages = articles.extract_pages(b"test")
     assert pages[0]["extraction_warnings"] == ["Some form content was skipped."]
 
