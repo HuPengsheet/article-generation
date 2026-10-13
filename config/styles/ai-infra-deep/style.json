@@ -7,7 +7,7 @@
     "section_count": [4, 8],
     "subsections": true,
     "opening": "problem_quote_then_attribution",
-    "closing": "implicit_through_last_section"
+    "closing": "explicit_short_summary"
   },
   "constraints": {
     "min_chars": 3500,
