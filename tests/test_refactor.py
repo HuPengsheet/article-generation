@@ -9,7 +9,6 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from arxiv_tool import cli as arxiv_cli
 from generator import cli, writer
 from generator.evidence import NOTES_PROMPT, merge_materials, validate_notes
 from generator.pipeline import generate
@@ -44,7 +43,7 @@ class GenericModel:
                 ],
                 "limitations": [],
             }
-        if system == writer.GENERIC_OUTLINE_PROMPT:
+        if system.startswith(writer.GENERIC_OUTLINE_PROMPT):
             assert "sections" not in data  # full raw material does not inflate later prompts
             return {
                 "title": "资料中的技术机制",
@@ -59,7 +58,7 @@ class GenericModel:
                     for heading in ["背景", "机制", "实现", "边界"]
                 ],
             }
-        if system == writer.GENERIC_REVIEW_PROMPT:
+        if system.startswith(writer.GENERIC_REVIEW_PROMPT):
             assert data["section_evidence"][0]["fact_quotes"] == data["facts"]
             return {
                 "issues": [
@@ -68,9 +67,11 @@ class GenericModel:
                 if self.bad_rewrite
                 else []
             }
-        if system == writer.GENERIC_REWRITE_PROMPT and self.bad_rewrite:
+        if system.startswith(writer.GENERIC_REWRITE_PROMPT) and self.bad_rewrite:
             return "# 无效改写\n\n伪造事实 [S99:B9]。"
-        assert system in (writer.GENERIC_ARTICLE_PROMPT, writer.GENERIC_REWRITE_PROMPT)
+        assert system.startswith(writer.GENERIC_ARTICLE_PROMPT) or system.startswith(
+            writer.GENERIC_REWRITE_PROMPT
+        )
         text = "# 资料中的技术机制\n\n" + "\n\n".join(
             "材料包含具体技术描述。 [" + fact["ref"] + "]" for fact in data["facts"]
         )
@@ -234,55 +235,6 @@ def test_url_pdf_sniffing_and_unknown_content(tmp_path, monkeypatch):
         url_source.UrlSource().extract("https://example.org/download", tmp_path / "bad")
 
 
-def test_arxiv_url_resolves_full_pinned_version(tmp_path, monkeypatch):
-    raw = pdf(tmp_path / "paper.pdf").read_bytes()
-    urls = []
-
-    def fetch(value, **kwargs):
-        urls.append(value)
-        return {
-            "content": b'<meta name="citation_title" content="Paper"><meta name="citation_author" content="A"><a href="/abs/2501.12345v2">Version 2</a>'
-            if "/abs/" in value
-            else raw
-        }
-
-    monkeypatch.setattr(url_source, "fetch", fetch)
-    monkeypatch.setattr(url_source, "collect_figures", lambda paper, directory: ([], []))
-    material = url_source.UrlSource().extract("https://arxiv.org/abs/2501.12345", tmp_path / "work")
-    assert urls[-1] == "https://arxiv.org/pdf/2501.12345v2"
-    assert material.title == "Paper" and material.authors == ["A"]
-    assert len(material.sections[0].text) > 300
-    assert material.metadata["version_id"] == "2501.12345v2"
-
-
-def test_arxiv_cli_no_llm_database_and_complete_exports(tmp_path, monkeypatch):
-    papers = [
-        {
-            "id": "test",
-            "title": "LLM KV Cache Serving",
-            "abstract": "Inference serving.",
-            "url": "https://arxiv.org/abs/2501.12345v1",
-        },
-        {
-            "id": "other",
-            "title": "Geometry",
-            "abstract": "",
-            "url": "https://arxiv.org/abs/2501.12346v1",
-        },
-    ]
-    monkeypatch.setattr(
-        arxiv_cli.collector, "collect", lambda *a, **k: ("2025-01-15", papers, {"complete": True})
-    )
-    monkeypatch.setattr(arxiv_cli, "LLM", lambda: pytest.fail("skip-ai must not instantiate model"))
-    assert arxiv_cli.main(["--skip-ai", "--output-dir", str(tmp_path)]) == 0
-    output = tmp_path / "2025-01-15"
-    assert len(json.loads((output / "papers.json").read_text())) == 2
-    assert len(json.loads((output / "filtered.json").read_text())) == 2
-    assert len(json.loads((output / "selected.json").read_text())) == 1
-    assert "未翻译" in (output / "selected.md").read_text()
-    assert not list(tmp_path.rglob("*.sqlite3"))
-
-
 def test_generator_cli_json_merge_batch_and_skip_records(tmp_path, monkeypatch):
     first, second = tmp_path / "first.md", tmp_path / "second.md"
     first.write_text("# First\n\nFirst source fact.", encoding="utf-8")
@@ -334,14 +286,10 @@ def test_source_registry_extension_and_package_independence(tmp_path):
     register(lambda value: value == "custom:test", CustomSource)
     assert isinstance(detect("custom:test"), CustomSource)
     root = Path(__file__).resolve().parents[1]
-    for module, forbidden in [
-        ("generator.cli", ("arxiv_tool", "web", "pipeline")),
-        ("arxiv_tool.cli", ("generator", "web", "pipeline")),
-    ]:
-        code = f'import {module}; import sys; assert not any(name.split(".")[0] in {forbidden!r} for name in sys.modules)'
-        subprocess.run(
-            [sys.executable, "-B", "-c", code], cwd=root, check=True, capture_output=True
-        )
+    code = 'import generator.cli; import sys; assert not any(name.split(".")[0] in ("web", "pipeline") for name in sys.modules)'
+    subprocess.run(
+        [sys.executable, "-B", "-c", code], cwd=root, check=True, capture_output=True
+    )
 
 
 def test_html_readability_and_declared_encoding(tmp_path):
@@ -359,111 +307,6 @@ def test_html_readability_and_declared_encoding(tmp_path):
     assert not any("菜单" in section.text for section in material.sections)
 
 
-def test_collection_offline_cache_and_invalid_date(tmp_path, monkeypatch):
-    from arxiv_tool import collector
-    from tests.test_pipeline import feed, taxonomy
-
-    directory = tmp_path / "2026-10-07"
-    directory.mkdir()
-    (directory / "taxonomy.html").write_bytes(taxonomy())
-    for name in ("cs", "math"):
-        (directory / f"{name}.xml").write_bytes(feed())
-    monkeypatch.setattr(
-        collector,
-        "request_bytes",
-        lambda url: pytest.fail("Complete historical cache must not use network"),
-    )
-    assert collector.collect(tmp_path, requested_date="2026-10-07")[0] == "2026-10-07"
-    with pytest.raises(ValueError, match="YYYY-MM-DD"):
-        collector.collect(tmp_path, requested_date="../bad")
-
-
-def test_ai_filter_translation_rejection_and_error_export(tmp_path, monkeypatch):
-    from arxiv_tool import ai_filter
-
-    papers = [
-        {
-            "id": str(i),
-            "title": "LLM KV Cache Serving",
-            "abstract": "Inference serving.",
-            "url": f"https://example.org/{i}",
-        }
-        for i in range(3)
-    ]
-
-    class Model:
-        configured = True
-        model = "controlled-filter-model"
-
-        def complete(self, system, user, json_mode=False):
-            paper = json.loads(user)
-            if paper["id"] == "2":
-                raise ValueError("受控失败")
-            return {
-                "id": paper["id"],
-                "decision": "keep" if paper["id"] == "0" else "reject",
-                "title_zh": "大模型 KV 缓存服务",
-                "relevance_score": 80,
-                "topics": ["推理"],
-                "summary_zh": "服务优化",
-                "reason": "基础设施",
-                "evidence": ["Inference serving."],
-                "limitations": "摘要证据",
-            }
-
-    monkeypatch.setattr(
-        arxiv_cli.collector, "collect", lambda *a, **k: ("2025-01-15", papers, {"complete": True})
-    )
-    monkeypatch.setattr(arxiv_cli, "LLM", Model)
-    assert arxiv_cli.main(["--output-dir", str(tmp_path)]) == 1
-    output = tmp_path / "2025-01-15"
-    assert len(json.loads((output / "ai-reviewed.json").read_text())) == 3
-    assert len(json.loads((output / "selected.json").read_text())) == 1
-    assert "大模型 KV 缓存服务" in (output / "selected.md").read_text()
-    with pytest.raises(ValueError, match="证据"):
-        ai_filter.filter_one(
-            papers[0],
-            type(
-                "BadModel",
-                (),
-                {
-                    "model": "bad",
-                    "complete": lambda *a: {
-                        "id": "0",
-                        "decision": "keep",
-                        "relevance_score": 1,
-                        "topics": [],
-                        "summary_zh": "",
-                        "reason": "",
-                        "evidence": ["invented"],
-                        "limitations": "",
-                    },
-                },
-            )(),
-            "",
-        )
-
-
-def test_interactive_exports_only_selected_with_all_human_states(tmp_path, monkeypatch):
-    papers = [
-        {"id": str(i), "title": "LLM KV Cache", "abstract": "", "url": f"https://example.org/{i}"}
-        for i in range(3)
-    ]
-    monkeypatch.setattr(
-        arxiv_cli.collector, "collect", lambda *a, **k: ("2025-01-15", papers, {"complete": True})
-    )
-    answers = iter(["bad", "y", "n", "l"])
-    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
-    assert arxiv_cli.main(["--skip-ai", "--interactive", "--output-dir", str(tmp_path)]) == 0
-    output = tmp_path / "2025-01-15"
-    assert [item["review"] for item in json.loads((output / "human-review.json").read_text())] == [
-        "selected",
-        "skipped",
-        "later",
-    ]
-    assert [item["paper"]["id"] for item in json.loads((output / "selected.json").read_text())] == [
-        "0"
-    ]
 
 
 def test_cli_full_process_with_local_http_sources_and_model(tmp_path):
@@ -577,19 +420,6 @@ def test_url_html_declared_charset_is_not_decoded_twice(tmp_path, monkeypatch):
     assert (tmp_path / "source.html").read_bytes() == raw
 
 
-def test_arxiv_rerun_preserves_manual_choices(tmp_path, monkeypatch):
-    papers = [
-        {"id": "one", "title": "LLM KV Cache", "abstract": "", "url": "https://example.org/one"}
-    ]
-    monkeypatch.setattr(
-        arxiv_cli.collector, "collect", lambda *a, **k: ("2025-01-15", papers, {"complete": True})
-    )
-    monkeypatch.setattr("builtins.input", lambda prompt: "n")
-    assert arxiv_cli.main(["--skip-ai", "--interactive", "--output-dir", str(tmp_path)]) == 0
-    assert arxiv_cli.main(["--skip-ai", "--output-dir", str(tmp_path)]) == 0
-    output = tmp_path / "2025-01-15"
-    assert json.loads((output / "selected.json").read_text()) == []
-    assert json.loads((output / "human-review.json").read_text())[0]["review"] == "skipped"
 
 
 def test_batch_damaged_pdf_does_not_abort_other_articles(tmp_path, monkeypatch):
@@ -613,3 +443,95 @@ def test_generic_citations_and_images_cannot_escape_manifest():
         )
     with pytest.raises(ValueError, match="图片"):
         writer.validate_generic_article('# Title\n\nKnown [S1:B1].\n\n<img src="x">', facts, [])
+
+
+def test_style_loading_and_default(tmp_path):
+    from generator.styles import Style, available_styles, load_style
+
+    # Default style loads from config/styles/
+    style = load_style()
+    assert isinstance(style, Style)
+    assert style.name == "ai-infra-deep"
+    assert "标题" in style.guide_text
+    assert "示例" in style.examples_text
+    assert len(style.banned_phrases) > 0
+
+    # Explicit name loads the same
+    explicit = load_style("ai-infra-deep")
+    assert explicit.name == style.name
+
+    # Missing style raises
+    with pytest.raises(ValueError, match="不存在"):
+        load_style("nonexistent-style")
+
+    # available_styles returns list
+    assert "ai-infra-deep" in available_styles()
+
+    # Empty directory returns None for default
+    empty = tmp_path / "empty-styles"
+    empty.mkdir()
+    assert load_style(styles_dir=empty) is None
+
+
+def test_style_injection_into_prompts():
+    from generator.styles import Style, inject_style, style_context
+
+    style = Style("test", {"constraints": {}}, "写短句。", "示例片段。")
+    prompt = "你是编辑。"
+    injected = inject_style(prompt, style)
+    assert "你是编辑。" in injected
+    assert "风格要求" in injected
+    assert "写短句。" in injected
+
+    # None style leaves prompt unchanged
+    assert inject_style(prompt, None) == prompt
+
+    # Examples context
+    assert style_context(style) == "示例片段。"
+    assert style_context(None) == ""
+
+
+def test_lint_uses_style_banned_phrases():
+    from generator.styles import Style
+
+    style = Style("test", {"constraints": {"banned_phrases": ["自定义套话"]}}, "", "")
+    article = "# Title\n\n这段包含自定义套话的文字。"
+    issues = writer.lint_article(article, style=style)
+    assert any("自定义套话" in issue["location"] for issue in issues)
+
+    # Without style the custom phrase is not flagged
+    issues_no_style = writer.lint_article(article)
+    assert not any("自定义套话" in issue["location"] for issue in issues_no_style)
+
+
+def test_pipeline_with_style(tmp_path):
+    md = tmp_path / "paper.md"
+    md.write_text("# Mechanism\n\nConcrete factual description.", encoding="utf-8")
+    material = MarkdownSource().extract(md, tmp_path / "source")
+    output = tmp_path / "article"
+    model = GenericModel()
+    result = generate(
+        [material], model, output, style="ai-infra-deep", angle="", depth="detailed"
+    )
+    # Style name recorded in notes
+    assert result.notes["style"] == "ai-infra-deep"
+    # Style examples present in evidence passed to model
+    outline_call = next(
+        (system, data) for system, data in model.calls if "大纲" in system and "风格" in system
+    )
+    assert "style_examples" in outline_call[1]
+
+    # Style guide injected into system prompts
+    article_call = next(
+        (system, data) for system, data in model.calls if "技术作者" in system
+    )
+    assert "风格要求" in article_call[0]
+
+
+def test_cli_style_parameter(tmp_path, monkeypatch):
+    md = tmp_path / "notes.md"
+    md.write_text("# Notes\n\nA measured fact.", encoding="utf-8")
+    monkeypatch.setattr(cli, "LLM", GenericModel)
+    assert cli.main([str(md), "--style", "ai-infra-deep", "--output-dir", str(tmp_path / "out")]) == 0
+    notes = json.loads(next((tmp_path / "out").rglob("notes.json")).read_text())
+    assert notes["style"] == "ai-infra-deep"

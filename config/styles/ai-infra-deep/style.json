@@ -1,0 +1,34 @@
+{
+  "name": "ai-infra-deep",
+  "description": "AI 基础设施深度技术文章，对标一线技术公众号风格",
+  "default": true,
+  "structure": {
+    "section_numbering": "一、二、三",
+    "section_count": [4, 8],
+    "subsections": true,
+    "opening": "problem_quote_then_attribution",
+    "closing": "implicit_through_last_section"
+  },
+  "constraints": {
+    "min_chars": 3500,
+    "max_chars": 8000,
+    "require_specific_metrics": true,
+    "banned_phrases": [
+      "值得注意的是",
+      "总的来说",
+      "综上所述",
+      "赋能",
+      "不难发现",
+      "可以看出",
+      "需要注意的是",
+      "换言之",
+      "深入探讨",
+      "至关重要",
+      "值得一提的是",
+      "不言而喻",
+      "众所周知",
+      "显而易见",
+      "毫无疑问"
+    ]
+  }
+}

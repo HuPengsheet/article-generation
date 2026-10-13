@@ -6,6 +6,7 @@ from pathlib import Path
 from generator.editorial import prepare_illustrations, validate_team_context
 from generator.evidence import extract_evidence, merge_materials
 from generator.output import save_output, write_json
+from generator.styles import Style, inject_style, load_style, style_context
 from generator.writer import (
     GENERIC_ARTICLE_PROMPT,
     GENERIC_OUTLINE_PROMPT,
@@ -24,6 +25,7 @@ def generate(
     llm,
     work_dir,
     *,
+    style=None,
     angle="",
     audience="工程师",
     depth="detailed",
@@ -33,6 +35,10 @@ def generate(
     progress=lambda message: None,
 ):
     team_context = validate_team_context(team_context)
+    if isinstance(style, str) or style is None:
+        style = load_style(style)
+    if not isinstance(style, (Style, type(None))):
+        raise ValueError("style 参数无效。")
     if (
         not isinstance(include_summary, bool)
         or depth not in ("brief", "detailed", "deep-dive")
@@ -53,16 +59,24 @@ def generate(
         model=llm.model,
         team_context=team_context,
         writing_options={"audience": audience, "depth": depth, "include_summary": include_summary},
+        style=style.name if style else None,
     )
+    examples = style_context(style)
+    if examples:
+        evidence["style_examples"] = examples
     write_json(
         directory / "materials.json",
         {"sources": evidence["sources"], "sections": evidence["sections"]},
     )
     write_json(directory / "notes.json", evidence)
+    outline_prompt = inject_style(GENERIC_OUTLINE_PROMPT, style)
+    article_prompt = inject_style(GENERIC_ARTICLE_PROMPT, style)
+    review_prompt = inject_style(GENERIC_REVIEW_PROMPT, style)
+    rewrite_prompt = inject_style(GENERIC_REWRITE_PROMPT, style)
     progress("设计写作大纲")
     outline = validate_generic_outline(
         llm.complete(
-            GENERIC_OUTLINE_PROMPT,
+            outline_prompt,
             json.dumps({k: v for k, v in evidence.items() if k != "sections"}, ensure_ascii=False),
             True,
         ),
@@ -75,18 +89,18 @@ def generate(
     progress("按大纲生成草稿")
     article = validate_generic_article(
         llm.complete(
-            GENERIC_ARTICLE_PROMPT,
+            article_prompt,
             json.dumps({k: v for k, v in evidence.items() if k != "sections"}, ensure_ascii=False),
         ),
         facts,
         evidence["figures"],
     )
     (directory / "draft.md").write_text(article, encoding="utf-8")
-    initial_lint = lint_article(article)
+    initial_lint = lint_article(article, style=style)
     progress("自查逻辑、证据与写作风格")
     issues = validate_review(
         llm.complete(
-            GENERIC_REVIEW_PROMPT,
+            review_prompt,
             json.dumps(
                 {
                     **{k: v for k, v in evidence.items() if k != "sections"},
@@ -108,7 +122,7 @@ def generate(
         progress("根据自查结果改写一次")
         review["rewrite_attempted"] = True
         revised = llm.complete(
-            GENERIC_REWRITE_PROMPT,
+            rewrite_prompt,
             json.dumps(
                 {
                     **{k: v for k, v in evidence.items() if k != "sections"},
@@ -125,17 +139,6 @@ def generate(
         except ValueError as error:
             review["rewrite_error"] = str(error)
             evidence["limitations"].append(f"改写未通过校验，保留初稿：{error}")
-    review["lint_after"] = lint_article(article)
+    review["lint_after"] = lint_article(article, style=style)
     evidence["review"] = review
     return save_output(article, evidence, directory)
-
-
-def generate_arxiv(paper, angle, llm, directory, progress=lambda message: None, **options):
-    """Web compatibility adapter. No collection, store, or selection dependency."""
-    from generator.identifiers import safe_id
-    from generator.sources.url import UrlSource
-
-    work_dir = Path(directory) / safe_id(paper["version_id"])
-    material = UrlSource().extract_paper(paper, work_dir / "sources/S1")
-    result = generate([material], llm, work_dir, angle=angle, progress=progress, **options)
-    return result.as_dict()

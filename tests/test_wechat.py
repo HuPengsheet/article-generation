@@ -1,4 +1,19 @@
-from pipeline.wechat import preview, render
+from generator.writer import lint_article
+from shared.wechat import preview, render
+
+
+def test_chinese_bold_labels_render_and_broken_markers_are_flagged():
+    broken = "**删去末 tile 的等待：**FA-4 写出 tile。"
+    corrected = "**删去末 tile 的等待**：FA-4 写出 tile。"
+    html = render(corrected)
+    assert "<strong style=" in html
+    assert "删去末 tile 的等待</strong>：FA-4" in html
+    assert "**" not in html
+    assert any("加粗标记未被" in issue["problem"] for issue in lint_article(broken))
+    assert lint_article(corrected) == []
+    # Code examples containing literal Markdown must remain untouched.
+    assert lint_article(f"`{broken}`") == []
+    assert lint_article(f"```markdown\n{broken}\n```") == []
 
 
 def test_rich_text_escapes_raw_html_and_unsafe_links():
@@ -44,6 +59,6 @@ def test_caption_has_smaller_gray_inline_style_but_body_does_not():
     )
     caption = html.split('data-figure-caption="true"', 1)[0].rsplit("<p ", 1)[1]
     assert "font-size:13px" in caption and "color:#6b7280" in caption
-    assert "<em>" in html
-    assert "font-size:16px;color:#273244" in html
+    assert "<em style=" in html
+    assert "font-size:16px;color:#3a3a3a" in html
     assert "data-figure-caption" not in render("![图](a.png)\n\n正常段落。")

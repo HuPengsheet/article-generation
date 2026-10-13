@@ -62,6 +62,7 @@ def main(argv=None):
     parser.add_argument("--depth", choices=["brief", "detailed", "deep-dive"], default="detailed")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "data/articles")
     parser.add_argument("--no-summary", action="store_true")
+    parser.add_argument("--style", default=None, help="风格名称，对应 config/styles/ 下的子目录")
     parser.add_argument("--team-context", type=Path)
     parser.add_argument(
         "--batch", action="store_true", help="每个展开后的来源分别生成一篇；默认合成一篇"
@@ -97,6 +98,7 @@ def main(argv=None):
                     materials,
                     model,
                     work_dir,
+                    style=args.style,
                     angle=args.angle,
                     audience=args.audience,
                     depth=args.depth,

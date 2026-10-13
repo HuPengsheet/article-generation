@@ -7,23 +7,24 @@ from urllib.parse import urljoin
 from markdown_it import MarkdownIt
 
 STYLES = {
-    "p": "margin:18px 0;line-height:1.85;font-size:16px;color:#273244;overflow-wrap:anywhere;",
+    "p": "margin:18px 0;line-height:1.8;font-size:16px;color:#3a3a3a;overflow-wrap:anywhere;",
     "h1": "font-size:24px;margin:30px 0 18px;line-height:1.5;color:#14283f;",
-    "h2": "font-size:21px;margin:32px 0 16px;line-height:1.5;color:#14283f;border-left:4px solid #2563eb;padding-left:12px;",
-    "h3": "font-size:18px;margin:26px 0 12px;color:#14283f;",
+    "h2": "font-size:22px;margin:36px 0 16px;line-height:1.5;color:#14283f;background:#fff5e3;padding:10px 16px;border-radius:4px;",
+    "h3": "font-size:17px;margin:26px 0 12px;color:#14283f;background:#fafafa;padding:8px 14px;border-radius:4px;",
     "strong": "font-weight:700;color:#14283f;",
     "a": "color:#2563eb;text-decoration:underline;overflow-wrap:anywhere;",
     "table": "border-collapse:collapse;width:100%;margin:20px 0;font-size:14px;table-layout:fixed;",
     "th": "background:#eef3fa;border:1px solid #cbd5e1;padding:10px 8px;text-align:left;line-height:1.6;overflow-wrap:anywhere;",
     "td": "border:1px solid #cbd5e1;padding:10px 8px;text-align:left;line-height:1.6;overflow-wrap:anywhere;",
-    "blockquote": "margin:20px 0;padding:2px 16px;border-left:3px solid #94a3b8;background:#f4f6fa;",
+    "blockquote": "margin:20px 0;padding:2px 16px;border-left:3px solid #fa5b0c;background:#fff9f5;",
     "ul": "padding-left:24px;margin:18px 0;",
     "ol": "padding-left:24px;margin:18px 0;",
-    "li": "margin:8px 0;line-height:1.85;font-size:16px;",
+    "li": "margin:8px 0;line-height:1.8;font-size:16px;",
     "hr": "border:0;border-top:1px solid #dbe3ee;margin:30px 0;",
-    "code": "font-family:monospace;background:#f1f5f9;padding:2px 4px;overflow-wrap:anywhere;",
+    "code": "font-family:monospace;background:#f1f5f9;padding:2px 4px;overflow-wrap:anywhere;color:#fa5b0c;",
     "pre": "white-space:pre-wrap;overflow-wrap:anywhere;background:#f1f5f9;padding:16px;font-size:13px;line-height:1.6;",
     "img": "max-width:100%;height:auto;display:block;margin:20px auto;",
+    "em": "color:#fa5b0c;font-style:normal;",
 }
 
 
