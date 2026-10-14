@@ -52,14 +52,15 @@ class GenericModel:
                         "heading": heading,
                         "goal": "解释具体问题",
                         "fact_refs": [fact["ref"] for fact in data["facts"]],
-                        "figures": [],
+                        # Figures are required now; put every one in the first section.
+                        "figures": [f["file"] for f in data["figures"]] if index == 0 else [],
                         "transition": "承接材料证据",
                     }
-                    for heading in ["背景", "机制", "实现", "边界"]
+                    for index, heading in enumerate(["背景", "机制", "实现", "边界"])
                 ],
             }
         if system.startswith(writer.GENERIC_REVIEW_PROMPT):
-            assert data["section_evidence"][0]["fact_quotes"] == data["facts"]
+            assert data["source_blocks"] and "section_evidence" not in data
             return {
                 "issues": [
                     {"location": "机制", "problem": "需要说明条件", "suggestion": "补充已有条件"}
@@ -287,9 +288,7 @@ def test_source_registry_extension_and_package_independence(tmp_path):
     assert isinstance(detect("custom:test"), CustomSource)
     root = Path(__file__).resolve().parents[1]
     code = 'import generator.cli; import sys; assert not any(name.split(".")[0] in ("web", "pipeline") for name in sys.modules)'
-    subprocess.run(
-        [sys.executable, "-B", "-c", code], cwd=root, check=True, capture_output=True
-    )
+    subprocess.run([sys.executable, "-B", "-c", code], cwd=root, check=True, capture_output=True)
 
 
 def test_html_readability_and_declared_encoding(tmp_path):
@@ -305,8 +304,6 @@ def test_html_readability_and_declared_encoding(tmp_path):
     assert any("性能边界" in section.text for section in material.sections)
     assert any("readability" in item for item in material.limitations)
     assert not any("菜单" in section.text for section in material.sections)
-
-
 
 
 def test_cli_full_process_with_local_http_sources_and_model(tmp_path):
@@ -420,8 +417,6 @@ def test_url_html_declared_charset_is_not_decoded_twice(tmp_path, monkeypatch):
     assert (tmp_path / "source.html").read_bytes() == raw
 
 
-
-
 def test_batch_damaged_pdf_does_not_abort_other_articles(tmp_path, monkeypatch):
     broken, good = tmp_path / "broken.pdf", tmp_path / "good.md"
     broken.write_bytes(b"%PDF-1.7\ntruncated")
@@ -510,28 +505,111 @@ def test_pipeline_with_style(tmp_path):
     material = MarkdownSource().extract(md, tmp_path / "source")
     output = tmp_path / "article"
     model = GenericModel()
-    result = generate(
-        [material], model, output, style="ai-infra-deep", angle="", depth="detailed"
-    )
+    result = generate([material], model, output, style="ai-infra-deep", angle="", depth="detailed")
     # Style name recorded in notes
     assert result.notes["style"] == "ai-infra-deep"
-    # Style examples present in evidence passed to model
+    # Outline sees reference layouts; the writer sees full reference articles and source text
     outline_call = next(
         (system, data) for system, data in model.calls if "大纲" in system and "风格" in system
     )
-    assert "style_examples" in outline_call[1]
+    assert outline_call[1]["template_layouts"]
+    assert "targets" in outline_call[1]
 
     # Style guide injected into system prompts
     article_call = next(
-        (system, data) for system, data in model.calls if "技术作者" in system
+        (system, data)
+        for system, data in model.calls
+        if system.startswith(writer.GENERIC_ARTICLE_PROMPT)
     )
     assert "风格要求" in article_call[0]
+    assert len(article_call[1]["reference_articles"]) == 2
+    assert article_call[1]["source_blocks"][0]["text"]
 
 
 def test_cli_style_parameter(tmp_path, monkeypatch):
     md = tmp_path / "notes.md"
     md.write_text("# Notes\n\nA measured fact.", encoding="utf-8")
     monkeypatch.setattr(cli, "LLM", GenericModel)
-    assert cli.main([str(md), "--style", "ai-infra-deep", "--output-dir", str(tmp_path / "out")]) == 0
+    assert (
+        cli.main([str(md), "--style", "ai-infra-deep", "--output-dir", str(tmp_path / "out")]) == 0
+    )
     notes = json.loads(next((tmp_path / "out").rglob("notes.json")).read_text())
     assert notes["style"] == "ai-infra-deep"
+
+
+def test_outline_and_article_enforce_figures_and_length():
+    facts = [{"ref": "S1:B1", "claim": "x", "quote": "x"}]
+    figures = [{"file": f"figures/S1-f{i}.png"} for i in range(4)]
+    section = {"heading": "一、机制", "goal": "g", "transition": "t", "fact_refs": ["S1:B1"]}
+    outline = {
+        "title": "标题",
+        "sections": [{**section, "figures": [figures[i]["file"]]} for i in range(3)]
+        + [{**section, "figures": []}],
+    }
+    with pytest.raises(ValueError, match="至少需要 4 张"):
+        writer.validate_generic_outline(outline, facts, figures, {"min_figures": 4})
+    outline["sections"][3]["figures"] = [figures[0]["file"]]
+    with pytest.raises(ValueError, match="只能分配一次"):
+        writer.validate_generic_outline(outline, facts, figures, {"min_figures": 4})
+    outline["sections"][3]["figures"] = [figures[3]["file"]]
+    writer.validate_generic_outline(outline, facts, figures, {"min_figures": 4})
+
+    images = "\n\n".join(f"![图{i}：x]({f['file']})" for i, f in enumerate(figures[:3], 1))
+    with pytest.raises(ValueError, match="未出现在正文"):
+        writer.validate_generic_article(
+            f"# T\n\n内容 [S1:B1]。\n\n{images}\n", facts, figures, outline
+        )
+    images += f"\n\n![图4：x]({figures[3]['file']})"
+    article = f"# T\n\n{'机制说明' * 50} [S1:B1]。\n\n{images}\n"
+    with pytest.raises(ValueError, match="少于要求"):
+        writer.validate_generic_article(article, facts, figures, outline, {"min_chars": 1000})
+    assert writer.validate_generic_article(article, facts, figures, outline, {"min_chars": 150})
+
+    shorter = article.replace("机制说明" * 50, "机制说明")
+    with pytest.raises(ValueError, match="缩短"):
+        writer.validate_rewrite(article, shorter)
+    with pytest.raises(ValueError, match="删除了原稿图片"):
+        writer.validate_rewrite(article, article.replace(f"({figures[3]['file']})", "(x.png)"))
+
+
+def test_lint_flags_analysis_labels():
+    article = "# T\n\n**分析**：这里是推论。\n\n正文。"
+    assert any("标签" in issue["problem"] for issue in writer.lint_article(article))
+
+
+def test_extract_template_from_wechat_page(tmp_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import extract_template
+
+    page = (
+        '<html><head><meta property="og:title" content="KCoral：GPU 评测"></head><body>'
+        '<div id="js_content"><p><strong>投稿/寻求报道</strong></p><p>关键词：GPU</p>'
+        "<p>开头段落，<strong>关键结论。</strong>后文</p>"
+        "<h2>本文目录</h2><ul><li>一、问题</li></ul><p>交流加群请在 NeuralTalk 后台</p>"
+        '<h2>一、问题</h2><figure><img src="a.png"><figcaption>图 1：架构。</figcaption></figure>'
+        '<p style="display: none">隐藏</p><p>正文段落。</p>'
+        "<p>相关推荐</p><ul><li>推广链接</li></ul><p>交流加群请在 NeuralTalk 后台</p>"
+        "</div></body></html>"
+    )
+    title, blocks = extract_template.extract(page)
+    markdown = extract_template.to_markdown(title, blocks)
+    assert markdown.startswith("# KCoral：GPU 评测")
+    assert "**关键结论**。后文" in markdown
+    assert "## 一、问题" in markdown and "*图 1：架构。*" in markdown
+    for noise in ("投稿", "关键词", "本文目录", "隐藏", "推广链接", "交流加群"):
+        assert noise not in markdown
+    assert extract_template.stats(title, blocks)["sections"] == 1
+
+
+def test_style_loads_templates_and_targets():
+    from generator.styles import load_style, pick_templates, writing_targets
+
+    style = load_style()
+    assert len(style.templates) >= 2
+    first = pick_templates(style, "论文 A")
+    assert len(first) == 2 and first == pick_templates(style, "论文 A")
+    targets = writing_targets(style, "detailed", figure_count=16, source_chars=100000)
+    assert targets["min_chars"] == 4000 and targets["min_figures"] >= 6
+    # Short sources and few figures lower the floors instead of forcing padding.
+    small = writing_targets(style, "deep-dive", figure_count=2, source_chars=8000)
+    assert small == {**small, "min_chars": 2000, "min_figures": 2}

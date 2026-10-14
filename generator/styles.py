@@ -1,7 +1,10 @@
 """Load, validate, and inject writing style configurations."""
 
+import hashlib
 import json
-from dataclasses import dataclass
+import math
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +17,9 @@ class Style:
     metadata: dict
     guide_text: str
     examples_text: str
+    # Full reference articles from scripts/extract_template.py: [(name, markdown)].
+    templates: list = field(default_factory=list)
+    stats: dict = field(default_factory=dict)
 
     @property
     def banned_phrases(self):
@@ -37,7 +43,13 @@ def load_style(name=None, *, styles_dir=None):
     examples = _read_optional(target / "examples.md")
     if not guide:
         raise ValueError(f"风格 {config['name']} 缺少 guide.md。")
-    return Style(config["name"], config, guide, examples or "")
+    templates_dir = target / "templates"
+    templates = [
+        (path.stem, path.read_text(encoding="utf-8")) for path in sorted(templates_dir.glob("*.md"))
+    ]
+    stats_path = templates_dir / "stats.json"
+    stats = json.loads(stats_path.read_text(encoding="utf-8")) if stats_path.is_file() else {}
+    return Style(config["name"], config, guide, examples or "", templates, stats)
 
 
 def available_styles(styles_dir=None):
@@ -45,9 +57,7 @@ def available_styles(styles_dir=None):
     if not directory.is_dir():
         return []
     return sorted(
-        d.name
-        for d in directory.iterdir()
-        if d.is_dir() and (d / "style.json").is_file()
+        d.name for d in directory.iterdir() if d.is_dir() and (d / "style.json").is_file()
     )
 
 
@@ -59,10 +69,68 @@ def inject_style(prompt, style):
 
 
 def style_context(style):
-    """Format examples as a user-context fragment for evidence JSON."""
-    if style is None or not style.examples_text:
+    """Short examples, used only when a style has no full reference articles."""
+    if style is None or style.templates or not style.examples_text:
         return ""
     return style.examples_text
+
+
+def pick_templates(style, key, count=2):
+    """Pick full reference articles; the key keeps one article's retries consistent
+    while different articles see different references."""
+    if style is None or not style.templates:
+        return []
+    start = int(hashlib.sha1(key.encode("utf-8")).hexdigest(), 16) % len(style.templates)
+    chosen = [style.templates[(start + i) % len(style.templates)] for i in range(count)]
+    return [{"name": name, "markdown": text} for name, text in dict(chosen).items()]
+
+
+def template_layouts(style):
+    """Per-section length and figure counts of every reference article, for outlining."""
+    layouts = []
+    for name, text in style.templates if style else []:
+        title = next(iter(re.findall(r"^# (.+)$", text, re.M)), "")
+        sections = []
+        for part in re.split(r"^## ", text, flags=re.M)[1:]:
+            heading, _, body = part.partition("\n")
+            sections.append(
+                {
+                    "heading": heading.strip(),
+                    "subsections": re.findall(r"^### (.+)$", body, re.M),
+                    "chars": prose_chars(body),
+                    "figures": len(re.findall(r"^!\[", body, re.M)),
+                }
+            )
+        layouts.append({"name": name, "title": title, "sections": sections})
+    return layouts
+
+
+def prose_chars(markdown):
+    """Count body characters, ignoring headings, images, citations, marks and spaces."""
+    lines = [line for line in markdown.splitlines() if not re.match(r"\s*(?:#|!\[)", line)]
+    text = re.sub(r"\[S\d+:B\d+\]", "", "\n".join(lines))
+    return len(re.sub(r"[\s*_>`|-]", "", text))
+
+
+# Lower bounds per depth; reference articles set the target above them.
+DEPTH_MIN_CHARS = {"brief": 1500, "detailed": 4000, "deep-dive": 6000}
+
+
+def writing_targets(style, depth, figure_count, source_chars):
+    """Length and figure floors the outline and article validators enforce."""
+    summary = (style.stats.get("summary") if style else None) or {}
+    median_figures = summary.get("figures", {}).get("median", 6)
+    # Short sources cannot support a long article without padding.
+    min_chars = min(DEPTH_MIN_CHARS[depth], source_chars // 4)
+    min_figures = min(figure_count, max(4, math.ceil(figure_count * 0.6)), median_figures)
+    targets = {"min_chars": min_chars, "min_figures": min_figures}
+    if summary:
+        targets["reference"] = {
+            key: summary[key]
+            for key in ("body_chars", "sections", "figures", "chars_per_figure")
+            if key in summary
+        }
+    return targets
 
 
 def _find_default(directory):

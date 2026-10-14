@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 from generator import sources
 from generator.evidence import NOTES_PROMPT, chunks, merge_materials, validate_notes
 from generator.output import save_output, write_json
-from generator.styles import inject_style, load_style, style_context
+from generator.styles import inject_style, load_style, style_context, writing_targets
 from generator.writer import (
     GENERIC_ARTICLE_PROMPT,
     GENERIC_OUTLINE_PROMPT,
@@ -28,9 +28,12 @@ from generator.writer import (
     GENERIC_REWRITE_PROMPT,
     generic_section_evidence,
     lint_article,
+    outline_source_blocks,
+    stage_payload,
     validate_generic_article,
     validate_generic_outline,
     validate_review,
+    validate_rewrite,
 )
 
 # ---------------------------------------------------------------------------
@@ -48,21 +51,48 @@ def _write_state(work_dir, state):
     write_json(Path(work_dir) / "state.json", state)
 
 
+# Long text moves to Markdown files: the Read tool truncates very long lines, so a
+# one-line JSON payload would silently hide figures, source text and references.
+CONTEXT_FILES = {
+    "source_blocks": ("sources.md", "原文正文块"),
+    "reference_articles": ("references.md", "范文（已发表的完整文章）"),
+    "article": ("article.md", "待审阅 / 待修订的文章"),
+}
+
+
+def _context_markdown(key, value):
+    if key == "article":
+        return value
+    if key == "reference_articles":
+        return "\n\n---\n\n".join(
+            f"<!-- 范文 {item['name']} -->\n\n{item['markdown']}" for item in value
+        )
+    return "\n\n".join(
+        f"## [{block['ref']}] {block.get('heading', '')}\n\n{block['text']}" for block in value
+    )
+
+
 def _write_current(work_dir, meta, system, user):
     current = Path(work_dir) / "current"
     current.mkdir(parents=True, exist_ok=True)
-    write_json(current / "meta.json", meta)
-    (current / "system.md").write_text(system, encoding="utf-8")
-    # user.json is always a JSON string (may be large)
-    if isinstance(user, str):
-        (current / "user.json").write_text(user, encoding="utf-8")
-    else:
-        write_json(current / "user.json", user)
-    # Clean previous response files
-    for name in ("response.json", "response.md"):
+    for name in ("response.json", "response.md", *(f for f, _ in CONTEXT_FILES.values())):
         path = current / name
         if path.exists():
             path.unlink()
+    files = []
+    if isinstance(user, dict):
+        user = dict(user)
+        for key, (filename, label) in CONTEXT_FILES.items():
+            if user.get(key):
+                (current / filename).write_text(
+                    _context_markdown(key, user.pop(key)) + "\n", encoding="utf-8"
+                )
+                user[key] = f"见 current/{filename}"
+                files.append({"file": filename, "content": label})
+    meta = {**meta, "context_files": files}
+    write_json(current / "meta.json", meta)
+    (current / "system.md").write_text(system, encoding="utf-8")
+    write_json(current / "user.json", user)
 
 
 def _read_response(work_dir, fmt):
@@ -84,12 +114,6 @@ def _read_response(work_dir, fmt):
 # ---------------------------------------------------------------------------
 
 
-def _evidence_without_sections(state):
-    """Build the evidence dict passed to outline/article/review/rewrite prompts,
-    stripping bulky raw sections to stay within context limits."""
-    return {k: v for k, v in state["evidence"].items() if k != "sections"}
-
-
 def _prepare_evidence_step(state, style):
     """Prepare the next evidence chunk prompt."""
     idx = state["chunk_index"]
@@ -101,50 +125,37 @@ def _prepare_evidence_step(state, style):
         "total_chunks": len(all_chunks),
         "format": "json",
     }
-    system = NOTES_PROMPT
-    user = json.dumps(part, ensure_ascii=False)
-    return meta, system, user
-
-
-def _prepare_outline_step(state, style):
-    ev = _evidence_without_sections(state)
-    meta = {"step": "outline", "format": "json"}
-    system = inject_style(GENERIC_OUTLINE_PROMPT, style)
-    user = json.dumps(ev, ensure_ascii=False)
-    return meta, system, user
-
-
-def _prepare_article_step(state, style):
-    ev = _evidence_without_sections(state)
-    meta = {"step": "article", "format": "markdown"}
-    system = inject_style(GENERIC_ARTICLE_PROMPT, style)
-    user = json.dumps(ev, ensure_ascii=False)
-    return meta, system, user
-
-
-def _prepare_review_step(state, style, article):
-    ev = _evidence_without_sections(state)
-    lint_issues = lint_article(article, style=style)
-    state["lint_before"] = lint_issues
-    ev_with_article = {**ev, "article": article, "lint": lint_issues}
-    meta = {"step": "review", "format": "json"}
-    system = inject_style(GENERIC_REVIEW_PROMPT, style)
-    user = json.dumps(ev_with_article, ensure_ascii=False)
-    return meta, system, user
-
-
-def _prepare_rewrite_step(state, style, article, issues):
-    ev = _evidence_without_sections(state)
-    ev_with_context = {
-        **ev,
-        "article": article,
-        "issues": issues,
-        "lint": state.get("lint_before", []),
+    # Same blocks the validator checks quotes against; the text goes to sources.md.
+    user = {
+        "blocks": [{k: v for k, v in block.items() if k != "text"} for block in part],
+        "source_blocks": part,
     }
-    meta = {"step": "rewrite", "format": "markdown"}
-    system = inject_style(GENERIC_REWRITE_PROMPT, style)
-    user = json.dumps(ev_with_context, ensure_ascii=False)
-    return meta, system, user
+    return meta, NOTES_PROMPT, user
+
+
+SYSTEMS = {
+    "outline": GENERIC_OUTLINE_PROMPT,
+    "article": GENERIC_ARTICLE_PROMPT,
+    "review": GENERIC_REVIEW_PROMPT,
+    "rewrite": GENERIC_REWRITE_PROMPT,
+}
+FORMATS = {"outline": "json", "article": "markdown", "review": "json", "rewrite": "markdown"}
+
+
+def _prepare_stage(state, style, stage, **extra):
+    meta = {"step": stage, "format": FORMATS[stage]}
+    if stage in ("article", "rewrite"):
+        meta["min_chars"] = state["evidence"]["targets"]["min_chars"]
+    user = stage_payload(state["evidence"], style, stage, **extra)
+    return meta, inject_style(SYSTEMS[stage], style), user
+
+
+def _advance(work_dir, state, style, stage, **extra):
+    state["step"] = stage
+    state["attempts"] = 0
+    _write_state(work_dir, state)
+    _write_current(work_dir, *_prepare_stage(state, style, stage, **extra))
+    print(f"READY: {Path(work_dir) / 'current/'}")
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +180,12 @@ def cmd_init(args):
     examples = style_context(style)
     if examples:
         evidence["style_examples"] = examples
+    evidence["targets"] = writing_targets(
+        style,
+        args.depth,
+        len(evidence["figures"]),
+        sum(len(block["text"]) for block in evidence["sections"]),
+    )
 
     # Build initial state
     all_chunks = list(chunks(evidence["sections"]))
@@ -232,7 +249,9 @@ def cmd_next(args):
     state = _read_state(work_dir)
     style = load_style(state["style"]) if state["style"] else None
     step = state["step"]
-    evidence = state["evidence"]
+    if step == "done":
+        print("ERROR: 该工作目录已完成生成。")
+        return 1
 
     meta_path = work_dir / "current" / "meta.json"
     meta = json.loads(meta_path.read_text("utf-8"))
@@ -266,6 +285,11 @@ def cmd_next(args):
     return 0
 
 
+# Validation failures print ERROR and keep the step; after this many the content
+# checks (length, figures) give way so a run cannot loop forever.
+MAX_ATTEMPTS = 3
+
+
 def _handle_evidence(state, response, work_dir, style):
     idx = state["chunk_index"]
     all_chunks = list(chunks(state["evidence"]["sections"]))
@@ -277,71 +301,64 @@ def _handle_evidence(state, response, work_dir, style):
 
     next_idx = idx + 1
     if next_idx < len(all_chunks):
-        # More chunks to process
         state["chunk_index"] = next_idx
-        state["step"] = "evidence"
         _write_state(work_dir, state)
-        meta, system, user = _prepare_evidence_step(state, style)
-        _write_current(work_dir, meta, system, user)
+        _write_current(work_dir, *_prepare_evidence_step(state, style))
         print(f"READY: {work_dir / 'current/'}")
-    else:
-        # Evidence complete, move to outline
-        state["evidence"]["facts"] = state["facts"]
-        state["evidence"]["limitations"].extend(state["limitations"])
-        state["evidence"].update(
-            angle=state["options"]["angle"],
-            model=state["model"],
-            team_context=None,
-            writing_options={
-                "audience": state["options"]["audience"],
-                "depth": state["options"]["depth"],
-                "include_summary": state["options"]["include_summary"],
-            },
-        )
-        write_json(work_dir / "notes.json", state["evidence"])
-        state["step"] = "outline"
-        _write_state(work_dir, state)
-        meta, system, user = _prepare_outline_step(state, style)
-        _write_current(work_dir, meta, system, user)
-        print(f"READY: {work_dir / 'current/'}")
+        return
+    if not state["facts"]:
+        raise ValueError("没有提取到可验证事实，已停止生成。")
+    state["evidence"]["facts"] = state["facts"]
+    state["evidence"]["limitations"].extend(state["limitations"])
+    write_json(work_dir / "notes.json", state["evidence"])
+    _advance(work_dir, state, style, "outline")
 
 
 def _handle_outline(state, response, work_dir, style):
-    facts = state["facts"]
-    figures = state["evidence"]["figures"]
-    outline = validate_generic_outline(response, facts, figures)
-
+    evidence = state["evidence"]
+    outline = validate_generic_outline(
+        response, state["facts"], evidence["figures"], evidence["targets"]
+    )
     state["outline"] = outline
-    state["evidence"]["outline"] = outline
-    state["evidence"]["section_evidence"] = generic_section_evidence(outline, facts)
+    evidence["outline"] = outline
+    evidence["section_evidence"] = generic_section_evidence(outline, state["facts"])
+    evidence["source_blocks"] = outline_source_blocks(outline, evidence["sections"])
     write_json(work_dir / "outline.json", outline)
+    _advance(work_dir, state, style, "article")
 
-    state["step"] = "article"
-    _write_state(work_dir, state)
-    meta, system, user = _prepare_article_step(state, style)
-    _write_current(work_dir, meta, system, user)
-    print(f"READY: {work_dir / 'current/'}")
+
+def _check_article(state, response, previous=None):
+    """Hard checks first; content targets are relaxed after repeated attempts."""
+    evidence = state["evidence"]
+    state["attempts"] = state.get("attempts", 0) + 1
+    try:
+        article = validate_generic_article(
+            response, state["facts"], evidence["figures"], state["outline"], evidence["targets"]
+        )
+        return validate_rewrite(previous, article) if previous else article
+    except ValueError as error:
+        if state["attempts"] < MAX_ATTEMPTS or previous:
+            raise
+        # Citations and figure paths remain mandatory.
+        article = validate_generic_article(response, state["facts"], evidence["figures"])
+        evidence["limitations"].append(f"多次修改后仍未达标：{error}")
+        return article
 
 
 def _handle_article(state, response, work_dir, style):
-    facts = state["facts"]
-    figures = state["evidence"]["figures"]
-    article = validate_generic_article(response, facts, figures)
-
+    try:
+        article = _check_article(state, response)
+    except ValueError:
+        _write_state(work_dir, state)
+        raise
     state["article"] = article
     (work_dir / "draft.md").write_text(article, encoding="utf-8")
-
-    state["step"] = "review"
-    _write_state(work_dir, state)
-    meta, system, user = _prepare_review_step(state, style, article)
-    _write_state(work_dir, state)  # save lint_before
-    _write_current(work_dir, meta, system, user)
-    print(f"READY: {work_dir / 'current/'}")
+    state["lint_before"] = lint_article(article, style=style)
+    _advance(work_dir, state, style, "review", article=article, lint=state["lint_before"])
 
 
 def _handle_review(state, response, work_dir, style):
     issues = validate_review(response)
-
     lint_before = state.get("lint_before", [])
     review = {
         "lint_before": lint_before,
@@ -349,47 +366,43 @@ def _handle_review(state, response, work_dir, style):
         "rewrite_attempted": False,
         "rewrite_applied": False,
     }
-
+    state["review"] = review
     if issues or lint_before:
-        # Need rewrite
-        state["review"] = review
-        state["step"] = "rewrite"
-        _write_state(work_dir, state)
-        meta, system, user = _prepare_rewrite_step(
-            state, style, state["article"], issues
+        _advance(
+            work_dir,
+            state,
+            style,
+            "rewrite",
+            article=state["article"],
+            issues=issues,
+            lint=lint_before,
         )
-        _write_current(work_dir, meta, system, user)
-        print(f"READY: {work_dir / 'current/'}")
-    else:
-        # No issues, save and finish
-        review["lint_after"] = lint_article(state["article"], style=style)
-        state["review"] = review
-        state["evidence"]["review"] = review
-        _write_state(work_dir, state)
-        result = save_output(state["article"], state["evidence"], work_dir)
-        print(f"DONE: {result.directory}/article.md")
+        return
+    _finish(state, work_dir, style)
 
 
 def _handle_rewrite(state, response, work_dir, style):
-    facts = state["facts"]
-    figures = state["evidence"]["figures"]
     review = state["review"]
     review["rewrite_attempted"] = True
-
     try:
-        article = validate_generic_article(response, facts, figures)
+        state["article"] = _check_article(state, response, previous=state["article"])
         review["rewrite_applied"] = True
-        state["article"] = article
     except ValueError as error:
+        if state["attempts"] < MAX_ATTEMPTS:
+            _write_state(work_dir, state)
+            raise
         review["rewrite_error"] = str(error)
         state["evidence"]["limitations"].append(f"改写未通过校验，保留初稿：{error}")
-        article = state["article"]
+    _finish(state, work_dir, style)
 
-    review["lint_after"] = lint_article(article, style=style)
-    state["review"] = review
+
+def _finish(state, work_dir, style):
+    review = state["review"]
+    review["lint_after"] = lint_article(state["article"], style=style)
     state["evidence"]["review"] = review
+    state["step"] = "done"
     _write_state(work_dir, state)
-    result = save_output(article, state["evidence"], work_dir)
+    result = save_output(state["article"], state["evidence"], work_dir)
     print(f"DONE: {result.directory}/article.md")
 
 
@@ -408,9 +421,7 @@ def main():
     init_p.add_argument("--style", default=None, help="风格名称")
     init_p.add_argument("--angle", default="", help="写作角度")
     init_p.add_argument("--audience", default="工程师", help="目标读者")
-    init_p.add_argument(
-        "--depth", default="detailed", choices=["brief", "detailed", "deep-dive"]
-    )
+    init_p.add_argument("--depth", default="detailed", choices=["brief", "detailed", "deep-dive"])
     init_p.add_argument("--no-summary", action="store_true", help="不写总结")
 
     next_p = sub.add_parser("next", help="校验响应并推进到下一步")

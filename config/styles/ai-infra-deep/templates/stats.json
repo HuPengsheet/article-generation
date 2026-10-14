@@ -1,0 +1,96 @@
+{
+  "articles": [
+    {
+      "file": "1.md",
+      "title": "超越单智能体极限！清华英伟达提出 HMA：双智能体上下文重置交替，拿下 MLE 领域 SOTA",
+      "title_chars": 47,
+      "body_chars": 8125,
+      "sections": 6,
+      "subsections": 17,
+      "paragraphs": 104,
+      "figures": 11,
+      "chars_per_figure": 739,
+      "caption_chars_median": 143,
+      "bold_paragraphs": 21
+    },
+    {
+      "file": "2.md",
+      "title": "MLSys 三赛道前三、奥赛四项满分背后大杀器：多智能体编码框架 Humanize 的\"裁判工程\"（Judgement Engineering）",
+      "title_chars": 72,
+      "body_chars": 5875,
+      "sections": 7,
+      "subsections": 10,
+      "paragraphs": 80,
+      "figures": 10,
+      "chars_per_figure": 588,
+      "caption_chars_median": 236,
+      "bold_paragraphs": 25
+    },
+    {
+      "file": "3.md",
+      "title": "数千美元、17 亿 Token、一周时间写出 Qwen 定制推理引擎，单流解码比调优后 vLLM 快 90%",
+      "title_chars": 54,
+      "body_chars": 4369,
+      "sections": 6,
+      "subsections": 2,
+      "paragraphs": 41,
+      "figures": 8,
+      "chars_per_figure": 546,
+      "caption_chars_median": 320,
+      "bold_paragraphs": 4
+    },
+    {
+      "file": "4.md",
+      "title": "MLC 开源 KCoral：GPU 评测从工具变成基础设施，给 kernel agent 用的轻量 GPU 基准服务器",
+      "title_chars": 59,
+      "body_chars": 7382,
+      "sections": 7,
+      "subsections": 3,
+      "paragraphs": 74,
+      "figures": 6,
+      "chars_per_figure": 1230,
+      "caption_chars_median": 249,
+      "bold_paragraphs": 4
+    },
+    {
+      "file": "5.md",
+      "title": "自动发现 FlashAttention 级优化：张量超优化器的相等饱和 e-graph 方法 EqiForge，实现 1.3 倍几何加速与 1.8 倍 FlashAttention 超越",
+      "title_chars": 93,
+      "body_chars": 8620,
+      "sections": 7,
+      "subsections": 18,
+      "paragraphs": 101,
+      "figures": 17,
+      "chars_per_figure": 507,
+      "caption_chars_median": 341,
+      "bold_paragraphs": 22
+    }
+  ],
+  "summary": {
+    "body_chars": {
+      "min": 4369,
+      "median": 7382,
+      "max": 8620
+    },
+    "sections": {
+      "min": 6,
+      "median": 7,
+      "max": 7
+    },
+    "figures": {
+      "min": 6,
+      "median": 10,
+      "max": 17
+    },
+    "chars_per_figure": {
+      "min": 507,
+      "median": 588,
+      "max": 1230
+    },
+    "caption_chars_median": {
+      "min": 143,
+      "median": 249,
+      "max": 341
+    }
+  }
+}

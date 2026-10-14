@@ -6,7 +6,7 @@ from pathlib import Path
 from generator.editorial import prepare_illustrations, validate_team_context
 from generator.evidence import extract_evidence, merge_materials
 from generator.output import save_output, write_json
-from generator.styles import Style, inject_style, load_style, style_context
+from generator.styles import Style, inject_style, load_style, style_context, writing_targets
 from generator.writer import (
     GENERIC_ARTICLE_PROMPT,
     GENERIC_OUTLINE_PROMPT,
@@ -14,9 +14,12 @@ from generator.writer import (
     GENERIC_REWRITE_PROMPT,
     generic_section_evidence,
     lint_article,
+    outline_source_blocks,
+    stage_payload,
     validate_generic_article,
     validate_generic_outline,
     validate_review,
+    validate_rewrite,
 )
 
 
@@ -64,6 +67,12 @@ def generate(
     examples = style_context(style)
     if examples:
         evidence["style_examples"] = examples
+    evidence["targets"] = writing_targets(
+        style,
+        depth,
+        len(evidence["figures"]),
+        sum(len(block["text"]) for block in evidence["sections"]),
+    )
     write_json(
         directory / "materials.json",
         {"sources": evidence["sources"], "sections": evidence["sections"]},
@@ -73,27 +82,45 @@ def generate(
     article_prompt = inject_style(GENERIC_ARTICLE_PROMPT, style)
     review_prompt = inject_style(GENERIC_REVIEW_PROMPT, style)
     rewrite_prompt = inject_style(GENERIC_REWRITE_PROMPT, style)
+
+    def ask(prompt, stage, validate, json_mode=False, fallback=None):
+        """Call the model, feeding validator errors back for up to two corrections.
+        `fallback` keeps only the hard checks once content targets keep failing."""
+        payload = stage_payload(evidence, style, stage)
+        for attempt in range(3):
+            result = llm.complete(prompt, json.dumps(payload, ensure_ascii=False), json_mode)
+            try:
+                return validate(result)
+            except ValueError as error:
+                if attempt == 2:
+                    if fallback is None:
+                        raise
+                    accepted = fallback(result)
+                    evidence["limitations"].append(f"多次修改后仍未达标：{error}")
+                    return accepted
+                progress(f"{stage} 未通过校验，重试：{error}")
+                payload = {**payload, "previous_error": str(error)}
+
+    targets = evidence["targets"]
     progress("设计写作大纲")
-    outline = validate_generic_outline(
-        llm.complete(
-            outline_prompt,
-            json.dumps({k: v for k, v in evidence.items() if k != "sections"}, ensure_ascii=False),
-            True,
-        ),
-        facts,
-        evidence["figures"],
+    outline = ask(
+        outline_prompt,
+        "outline",
+        lambda result: validate_generic_outline(result, facts, evidence["figures"], targets),
+        True,
     )
     evidence["outline"] = outline
     evidence["section_evidence"] = generic_section_evidence(outline, facts)
+    evidence["source_blocks"] = outline_source_blocks(outline, evidence["sections"])
     write_json(directory / "outline.json", outline)
     progress("按大纲生成草稿")
-    article = validate_generic_article(
-        llm.complete(
-            article_prompt,
-            json.dumps({k: v for k, v in evidence.items() if k != "sections"}, ensure_ascii=False),
+    article = ask(
+        article_prompt,
+        "article",
+        lambda result: validate_generic_article(
+            result, facts, evidence["figures"], outline, targets
         ),
-        facts,
-        evidence["figures"],
+        fallback=lambda result: validate_generic_article(result, facts, evidence["figures"]),
     )
     (directory / "draft.md").write_text(article, encoding="utf-8")
     initial_lint = lint_article(article, style=style)
@@ -102,11 +129,7 @@ def generate(
         llm.complete(
             review_prompt,
             json.dumps(
-                {
-                    **{k: v for k, v in evidence.items() if k != "sections"},
-                    "article": article,
-                    "lint": initial_lint,
-                },
+                stage_payload(evidence, style, "review", article=article, lint=initial_lint),
                 ensure_ascii=False,
             ),
             True,
@@ -124,17 +147,17 @@ def generate(
         revised = llm.complete(
             rewrite_prompt,
             json.dumps(
-                {
-                    **{k: v for k, v in evidence.items() if k != "sections"},
-                    "article": article,
-                    "issues": issues,
-                    "lint": initial_lint,
-                },
+                stage_payload(
+                    evidence, style, "rewrite", article=article, issues=issues, lint=initial_lint
+                ),
                 ensure_ascii=False,
             ),
         )
         try:
-            article = validate_generic_article(revised, facts, evidence["figures"])
+            article = validate_rewrite(
+                article,
+                validate_generic_article(revised, facts, evidence["figures"], outline, targets),
+            )
             review["rewrite_applied"] = True
         except ValueError as error:
             review["rewrite_error"] = str(error)
