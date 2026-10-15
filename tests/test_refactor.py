@@ -68,6 +68,24 @@ class GenericModel:
                 if self.bad_rewrite
                 else []
             }
+        if system.startswith(writer.CRITIC_PROMPT):
+            assert data["article"] and data["source_blocks"] and data["reference_articles"]
+            return {
+                "score": 7,
+                "verdict": "结构完整，个别段落需要补充条件。",
+                "issues": [
+                    {
+                        "aspect": "logic",
+                        "severity": "medium",
+                        "location": "机制",
+                        "problem": "缺少条件",
+                        "suggestion": "补充原文条件",
+                    }
+                ],
+            }
+        if system.startswith(writer.REVISE_PROMPT):
+            assert data["critique"]["issues"]
+            return data["article"] + "\n第二轮补充的条件说明。 [" + data["facts"][0]["ref"] + "]\n"
         if system.startswith(writer.GENERIC_REWRITE_PROMPT) and self.bad_rewrite:
             return "# 无效改写\n\n伪造事实 [S99:B9]。"
         assert system.startswith(writer.GENERIC_ARTICLE_PROMPT) or system.startswith(
@@ -167,6 +185,11 @@ def test_generic_pipeline_output_and_invalid_rewrite_retains_draft(tmp_path):
     assert "[S1:B" in (output / "article-cited.md").read_text()
     assert result.notes["review"]["rewrite_attempted"]
     assert not result.notes["review"]["rewrite_applied"]
+    # An independent critic runs after the first round and drives a second revision.
+    assert result.notes["review"]["critique"]["score"] == 7
+    assert result.notes["review"]["revise_applied"]
+    assert "第二轮补充" in result.markdown
+    assert "独立审稿" in (output / "review.md").read_text()
     assert result.notes["writing_options"] == {
         "audience": "系统工程师",
         "depth": "deep-dive",
@@ -613,3 +636,96 @@ def test_style_loads_templates_and_targets():
     # Short sources and few figures lower the floors instead of forcing padding.
     small = writing_targets(style, "deep-dive", figure_count=2, source_chars=8000)
     assert small == {**small, "min_chars": 2000, "min_figures": 2}
+
+
+def test_skill_step_critique_round(tmp_path, monkeypatch):
+    """Host-agnostic flow: the critic gets a self-contained task dir, revise follows."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import skill_step
+
+    image(tmp_path / "method.png")
+    md = tmp_path / "paper.md"
+    md.write_text(
+        "# Mechanism\n\n" + "Concrete factual description. " * 20 + "\n\n![Cap](method.png)"
+    )
+    work = tmp_path / "work"
+
+    def run(*argv):
+        monkeypatch.setattr(sys, "argv", ["skill_step.py", *argv])
+        return skill_step.main()
+
+    def respond(name, value):
+        path = work / "current" / name
+        path.write_text(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False))
+
+    assert run("init", str(md), str(work), "--depth", "brief") == 0
+    sections = json.loads((work / "state.json").read_text())["evidence"]["sections"]
+    figure = json.loads((work / "state.json").read_text())["evidence"]["figures"][0]["file"]
+    respond(
+        "response.json",
+        {
+            "facts": [
+                {"claim": "事实", "ref": b["ref"], "quote": b["text"][:30]} for b in sections
+            ],
+            "limitations": [],
+        },
+    )
+    assert run("next", str(work)) == 0
+    refs = [b["ref"] for b in sections]
+    section = {"goal": "g", "transition": "t", "fact_refs": refs}
+    respond(
+        "response.json",
+        {
+            "title": "机制",
+            "sections": [
+                {**section, "heading": f"{n}、节", "figures": [figure] if n == "一" else []}
+                for n in "一二三四"
+            ],
+        },
+    )
+    assert run("next", str(work)) == 0
+    draft = f"# 机制\n\n{'机制的具体说明。' * 30} [{refs[-1]}]\n\n![图1：机制]({figure})\n\n*图1：说明。*\n"
+    respond("response.md", draft)
+    assert run("next", str(work)) == 0
+    respond("response.json", {"issues": []})
+    assert run("next", str(work)) == 0
+    meta = json.loads((work / "current/meta.json").read_text())
+    assert meta["step"] == "critique"
+    critic = Path(meta["critic_dir"])
+    assert {"task.md", "user.json", "article.md", "sources.md"} <= {
+        p.name for p in critic.iterdir()
+    }
+    assert "逻辑与一致性" in (critic / "task.md").read_text()
+    # The subagent has not written its result yet.
+    assert run("next", str(work)) == 1
+    issue = {"aspect": "logic", "severity": "high", "location": "x", "problem": "y"}
+    critique = {"score": 6, "verdict": "需要补充。", "issues": [issue]}
+    (critic / "response.json").write_text(json.dumps(critique))
+    assert run("next", str(work)) == 1
+    issue["suggestion"] = "改为原文说法"
+    (critic / "response.json").write_text(json.dumps(critique))
+    assert run("next", str(work)) == 0
+    meta = json.loads((work / "current/meta.json").read_text())
+    assert meta["step"] == "revise"
+    assert "critique" in json.loads((work / "current/user.json").read_text())
+    article = json.loads((work / "state.json").read_text())["article"]
+    respond("response.md", article + f"\n补充的原文条件。 [{refs[-1]}]\n")
+    assert run("next", str(work)) == 0
+    assert "补充的原文条件" in (work / "article.md").read_text()
+    assert "评分：6/10" in (work / "review.md").read_text()
+
+
+def test_host_agent_definitions_stay_in_sync():
+    """Claude Code and Codex read different files; both must describe the same critic."""
+    root = Path(__file__).resolve().parents[1]
+    claude = (root / ".claude/agents/article-critic.md").read_text(encoding="utf-8")
+    codex = (root / ".codex/agents/article-critic.toml").read_text(encoding="utf-8")
+    assert "name: article-critic" in claude and 'name = "article_critic"' in codex
+    for text in (claude, codex):
+        assert "task.md" in text and "response.json" in text
+    skill = root / ".agents/skills/generate-article/SKILL.md"
+    linked = root / ".claude/skills/generate-article/SKILL.md"
+    assert linked.resolve() == skill.resolve()
+    content = skill.read_text(encoding="utf-8")
+    assert content.startswith("---\nname: generate-article\n")
+    assert "article-critic" in content and "article_critic" in content

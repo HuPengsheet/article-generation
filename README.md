@@ -129,6 +129,15 @@ JSON 输入须为数组，元素可以是路径/链接字符串、`{"url":"..."}
 
 流程为：提取 → 校验证据笔记 → 大纲 → 草稿 → 自查 → 必要时改写一次。大纲参考范文的章节结构；草稿、自查和改写都会收到大纲引用的原文正文块和完整范文。大纲选图数量、正文是否放入选定图片、正文字数都有硬性校验，未通过时把错误反馈给模型重写，最多 3 次；仍不达标时只保留引用与图片路径校验，并在 review.md 记录。改写稿不能比初稿明显变短或删图，否则保留初稿。风格检查覆盖套话、重复段首、列表占比、泛化启发章节和缺少量化条件的性能表述，属于提示，不能替代人工审核。
 
+### 独立审稿与二轮修改
+
+第一轮自查改写之后，由一个独立审稿人（不带写作上下文）从整体质量、逻辑与一致性（前后矛盾、与原文不符）、AI 味三方面检查，给出 1–10 分和带严重程度的意见。有 high 或 medium 级别的问题时，根据意见做第二轮修改；修改稿同样要通过引用、配图、篇幅校验，并且不能变短或删图，否则保留上一稿。意见写入 `critique.json` 与 `review.md`。
+
+- API 流水线（`python -m generator`）：审稿是一次独立的模型调用。
+- Claude Code / Codex 的 `generate-article` skill：`skill_step.py` 在 `current/critic/` 准备自包含的审稿任务，由主 Agent 启动子 Agent 完成。子 Agent 定义分别在 `.claude/agents/article-critic.md` 和 `.codex/agents/article-critic.toml`，两者内容需保持一致。skill 本体在 `.agents/skills/generate-article/SKILL.md`（Codex 的读取位置），`.claude/skills/generate-article` 是指向它的符号链接。
+
+生成完成后，可以运行 `python scripts/check_subagent.py <WORK_DIR>`，在 Claude Code（`~/.claude/projects`）和 Codex（`~/.codex/sessions`）的会话记录里查找这次的审稿任务路径，判断审稿是不是由子 Agent 完成的。
+
 ### 风格范文
 
 风格目录 `config/styles/<name>/` 下的 `guide.md` 是写作要点，`templates/*.md` 是完整范文，`templates/stats.json` 记录范文的字数、章节和配图密度，用来确定字数和配图下限。范文从保存的公众号网页生成：

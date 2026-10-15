@@ -11,6 +11,7 @@ generates a response into current/response.json or response.md, then calls `next
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -22,14 +23,18 @@ from generator.evidence import NOTES_PROMPT, chunks, merge_materials, validate_n
 from generator.output import save_output, write_json
 from generator.styles import inject_style, load_style, style_context, writing_targets
 from generator.writer import (
+    CRITIC_PROMPT,
     GENERIC_ARTICLE_PROMPT,
     GENERIC_OUTLINE_PROMPT,
     GENERIC_REVIEW_PROMPT,
     GENERIC_REWRITE_PROMPT,
+    REVISE_PROMPT,
     generic_section_evidence,
     lint_article,
+    needs_revision,
     outline_source_blocks,
     stage_payload,
+    validate_critique,
     validate_generic_article,
     validate_generic_outline,
     validate_review,
@@ -40,7 +45,7 @@ from generator.writer import (
 # State helpers
 # ---------------------------------------------------------------------------
 
-STEPS = ("evidence", "outline", "article", "review", "rewrite")
+STEPS = ("evidence", "outline", "article", "review", "rewrite", "critique", "revise")
 
 
 def _read_state(work_dir):
@@ -79,24 +84,32 @@ def _write_current(work_dir, meta, system, user):
         path = current / name
         if path.exists():
             path.unlink()
-    files = []
-    if isinstance(user, dict):
-        user = dict(user)
-        for key, (filename, label) in CONTEXT_FILES.items():
-            if user.get(key):
-                (current / filename).write_text(
-                    _context_markdown(key, user.pop(key)) + "\n", encoding="utf-8"
-                )
-                user[key] = f"见 current/{filename}"
-                files.append({"file": filename, "content": label})
+    if (current / "critic").exists():
+        shutil.rmtree(current / "critic")
+    user, files = _split_context(current, user)
     meta = {**meta, "context_files": files}
     write_json(current / "meta.json", meta)
     (current / "system.md").write_text(system, encoding="utf-8")
     write_json(current / "user.json", user)
 
 
-def _read_response(work_dir, fmt):
-    current = Path(work_dir) / "current"
+def _split_context(directory, user):
+    """Write long fields to Markdown files beside user.json and point to them."""
+    files = []
+    user = dict(user)
+    for key, (filename, label) in CONTEXT_FILES.items():
+        if user.get(key):
+            (directory / filename).write_text(
+                _context_markdown(key, user.pop(key)) + "\n", encoding="utf-8"
+            )
+            user[key] = f"见同目录 {filename}"
+            files.append({"file": filename, "content": label})
+    return user, files
+
+
+def _read_response(work_dir, fmt, root=False):
+    """Read current/response.*; with root=True, `work_dir` is the response directory."""
+    current = Path(work_dir) if root else Path(work_dir) / "current"
     if fmt == "json":
         path = current / "response.json"
         if not path.exists():
@@ -138,13 +151,21 @@ SYSTEMS = {
     "article": GENERIC_ARTICLE_PROMPT,
     "review": GENERIC_REVIEW_PROMPT,
     "rewrite": GENERIC_REWRITE_PROMPT,
+    "revise": REVISE_PROMPT,
 }
-FORMATS = {"outline": "json", "article": "markdown", "review": "json", "rewrite": "markdown"}
+FORMATS = {
+    "outline": "json",
+    "article": "markdown",
+    "review": "json",
+    "rewrite": "markdown",
+    "critique": "json",
+    "revise": "markdown",
+}
 
 
 def _prepare_stage(state, style, stage, **extra):
     meta = {"step": stage, "format": FORMATS[stage]}
-    if stage in ("article", "rewrite"):
+    if stage in ("article", "rewrite", "revise"):
         meta["min_chars"] = state["evidence"]["targets"]["min_chars"]
     user = stage_payload(state["evidence"], style, stage, **extra)
     return meta, inject_style(SYSTEMS[stage], style), user
@@ -154,8 +175,38 @@ def _advance(work_dir, state, style, stage, **extra):
     state["step"] = stage
     state["attempts"] = 0
     _write_state(work_dir, state)
+    if stage == "critique":
+        _write_critic(work_dir, state, style)
+        print(f"CRITIQUE: {Path(work_dir).resolve() / 'current/critic'}")
+        return
     _write_current(work_dir, *_prepare_stage(state, style, stage, **extra))
     print(f"READY: {Path(work_dir) / 'current/'}")
+
+
+def _write_critic(work_dir, state, style):
+    """A self-contained task directory, so any host can hand it to a fresh subagent:
+    the agent only reads files in this directory and writes one file."""
+    current = Path(work_dir) / "current"
+    _write_current(work_dir, {"step": "critique", "format": "json"}, "", {})
+    (current / "system.md").unlink()
+    (current / "user.json").unlink()
+    directory = current / "critic"
+    directory.mkdir()
+    payload = stage_payload(state["evidence"], style, "critique", article=state["article"])
+    user, files = _split_context(directory, payload)
+    write_json(directory / "user.json", user)
+    names = "、".join(["user.json"] + [item["file"] for item in files])
+    (directory / "task.md").write_text(
+        f"{CRITIC_PROMPT}\n\n## 输入与输出\n\n"
+        f"完整读取本目录下的 {names}（较长的文件分段读完）。"
+        "审稿意见写入本目录的 response.json，只写纯 JSON，不加代码围栏。"
+        "不要修改本目录以外的任何文件。\n",
+        encoding="utf-8",
+    )
+    write_json(
+        current / "meta.json",
+        {"step": "critique", "format": "json", "critic_dir": str(directory.resolve())},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +309,11 @@ def cmd_next(args):
     fmt = meta["format"]
 
     try:
-        response = _read_response(work_dir, fmt)
+        response = (
+            _read_response(work_dir / "current" / "critic", fmt, root=True)
+            if step == "critique"
+            else _read_response(work_dir, fmt)
+        )
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"ERROR: 无法读取响应文件: {e}")
         return 1
@@ -275,6 +330,10 @@ def cmd_next(args):
             _handle_review(state, response, work_dir, style)
         elif step == "rewrite":
             _handle_rewrite(state, response, work_dir, style)
+        elif step == "critique":
+            _handle_critique(state, response, work_dir, style)
+        elif step == "revise":
+            _handle_revise(state, response, work_dir, style)
         else:
             print(f"ERROR: 未知步骤 {step}")
             return 1
@@ -378,7 +437,7 @@ def _handle_review(state, response, work_dir, style):
             lint=lint_before,
         )
         return
-    _finish(state, work_dir, style)
+    _advance(work_dir, state, style, "critique")
 
 
 def _handle_rewrite(state, response, work_dir, style):
@@ -393,6 +452,31 @@ def _handle_rewrite(state, response, work_dir, style):
             raise
         review["rewrite_error"] = str(error)
         state["evidence"]["limitations"].append(f"改写未通过校验，保留初稿：{error}")
+    _advance(work_dir, state, style, "critique")
+
+
+def _handle_critique(state, response, work_dir, style):
+    critique = validate_critique(response)
+    state["review"].update(critique=critique, revise_attempted=False)
+    write_json(Path(work_dir) / "critique.json", critique)
+    if not needs_revision(critique):
+        _finish(state, work_dir, style)
+        return
+    _advance(work_dir, state, style, "revise", article=state["article"], critique=critique)
+
+
+def _handle_revise(state, response, work_dir, style):
+    review = state["review"]
+    review["revise_attempted"] = True
+    try:
+        state["article"] = _check_article(state, response, previous=state["article"])
+        review["revise_applied"] = True
+    except ValueError as error:
+        if state["attempts"] < MAX_ATTEMPTS:
+            _write_state(work_dir, state)
+            raise
+        review["revise_error"] = str(error)
+        state["evidence"]["limitations"].append(f"二轮修改未通过校验，保留上一稿：{error}")
     _finish(state, work_dir, style)
 
 

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from generator.evidence import publication_copy
+from generator.writer import ASPECTS
 from shared.wechat import preview
 
 
@@ -70,6 +71,21 @@ def review_markdown(evidence):
     lines.append(f"改写尝试：{review['rewrite_attempted']}；应用：{review['rewrite_applied']}。")
     for issue in review["lint_before"] + review["issues"] + review["lint_after"]:
         lines.append(f"- {issue['location']}：{issue['problem']}；建议：{issue['suggestion']}")
+    critique = review.get("critique")
+    if critique:
+        lines.extend(["", "## 独立审稿（二轮修改依据）", ""])
+        lines.append(
+            f"评分：{critique['score']}/10；二轮修改尝试：{review.get('revise_attempted', False)}；"
+            f"应用：{review.get('revise_applied', False)}。"
+        )
+        if review.get("revise_error"):
+            lines.append(f"未应用原因：{review['revise_error']}")
+        lines.extend(["", critique["verdict"], ""])
+        for issue in critique["issues"]:
+            lines.append(
+                f"- [{ASPECTS[issue['aspect']]}/{issue['severity']}] {issue['location']}："
+                f"{issue['problem']}；建议：{issue['suggestion']}"
+            )
     for source in (evidence.get("team_context") or {}).get("sources", []):
         lines.append(f"- 团队背景来源：[{source['title']}]({source['url']})")
     lines.extend(["", "## 阅读局限", ""])

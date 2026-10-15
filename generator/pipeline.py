@@ -8,14 +8,18 @@ from generator.evidence import extract_evidence, merge_materials
 from generator.output import save_output, write_json
 from generator.styles import Style, inject_style, load_style, style_context, writing_targets
 from generator.writer import (
+    CRITIC_PROMPT,
     GENERIC_ARTICLE_PROMPT,
     GENERIC_OUTLINE_PROMPT,
     GENERIC_REVIEW_PROMPT,
     GENERIC_REWRITE_PROMPT,
+    REVISE_PROMPT,
     generic_section_evidence,
     lint_article,
+    needs_revision,
     outline_source_blocks,
     stage_payload,
+    validate_critique,
     validate_generic_article,
     validate_generic_outline,
     validate_review,
@@ -162,6 +166,38 @@ def generate(
         except ValueError as error:
             review["rewrite_error"] = str(error)
             evidence["limitations"].append(f"改写未通过校验，保留初稿：{error}")
+    progress("独立审稿：整体质量、逻辑一致性、AI 味")
+    # A separate call gives the critic a fresh context, like a subagent.
+    critique = validate_critique(
+        llm.complete(
+            CRITIC_PROMPT,
+            json.dumps(
+                stage_payload(evidence, style, "critique", article=article), ensure_ascii=False
+            ),
+            True,
+        )
+    )
+    review.update(critique=critique, revise_attempted=False, revise_applied=False)
+    write_json(directory / "critique.json", critique)
+    if needs_revision(critique):
+        progress("根据审稿意见进行二轮修改")
+        review["revise_attempted"] = True
+        revised = llm.complete(
+            inject_style(REVISE_PROMPT, style),
+            json.dumps(
+                stage_payload(evidence, style, "revise", article=article, critique=critique),
+                ensure_ascii=False,
+            ),
+        )
+        try:
+            article = validate_rewrite(
+                article,
+                validate_generic_article(revised, facts, evidence["figures"], outline, targets),
+            )
+            review["revise_applied"] = True
+        except ValueError as error:
+            review["revise_error"] = str(error)
+            evidence["limitations"].append(f"二轮修改未通过校验，保留上一稿：{error}")
     review["lint_after"] = lint_article(article, style=style)
     evidence["review"] = review
     return save_output(article, evidence, directory)

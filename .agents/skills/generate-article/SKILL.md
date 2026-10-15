@@ -1,17 +1,20 @@
 ---
+name: generate-article
 description: >
   从 URL、PDF 或本地文件生成中文技术文章。当用户提供论文链接并要求生成文章、写技术解读、
   技术分析时使用此 skill。支持 arXiv、PDF、HTML、Markdown 来源。
-allowed-tools: Bash, Read, Write, Glob
+allowed-tools: Bash, Read, Write, Glob, Agent
 ---
 
 # 文章生成 Skill
 
 你将扮演 LLM，按步骤完成技术文章生成流水线。非 LLM 部分（材料下载提取、校验、保存）由 Python 脚本 `scripts/skill_step.py` 处理。
 
+本 skill 同时用于 Claude Code（`.claude/skills/generate-article` 链接到这里）和 Codex（`.agents/skills/generate-article`）。所有命令在仓库根目录执行。
+
 ## 输入解析
 
-用户输入格式：`$ARGUMENTS`
+用户输入：`$ARGUMENTS`（Claude Code 会替换为命令参数；如果这里仍是字面量 `$ARGUMENTS`，就从用户的消息中提取）
 
 从中提取：
 - **source**：URL 或文件路径（必需，第一个参数）
@@ -64,7 +67,25 @@ python scripts/skill_step.py init "<source>" "$WORK_DIR" [--style NAME] [--angle
 8. 检查输出：
    - 如果输出以 `DONE:` 开头 → 退出循环，进入第 3 步
    - 如果输出以 `READY:` 开头 → 回到步骤 1 继续
+   - 如果输出以 `CRITIQUE:` 开头 → 执行下面的「独立审稿」，完成后再次运行 next
    - 如果输出以 `ERROR:` 开头 → 阅读错误信息，修正响应后重新写入 response 文件，再次运行 next。常见原因：大纲选图不够、正文漏放大纲选定的图、正文字数低于 meta.json 的 `min_chars`、改写稿比原稿短。修正时补写内容，不要删减。连续 3 次未达标时脚本会放宽篇幅和配图要求并记录到 review.md
+
+### 独立审稿（子 Agent）
+
+第一轮自查和改写完成后，脚本输出 `CRITIQUE: <目录>`，并在该目录（即 `current/critic/`，`meta.json` 的 `critic_dir`）准备一个自包含的审稿任务：`task.md` 是审稿指令（整体质量、逻辑与一致性、AI 味），同目录下有文章、原文、范文和 `user.json`，审稿意见写入同目录的 `response.json`。
+
+**审稿必须交给一个子 Agent，等它完成后再继续。** 主 Agent 写了这篇文章，自己审稿会带着写作时的判断。
+
+- **Claude Code**：用 Agent 工具，`subagent_type` 为 `article-critic`，prompt 只写：`审稿任务目录：<critic_dir>。阅读其中的 task.md 并按要求完成。`
+- **Codex**：启动一个 `article_critic` 子 agent，只告诉它：`审稿任务目录：<critic_dir>。阅读其中的 task.md 并按要求完成。` 等待它完成。
+- 不要把文章内容、你自己的看法或修改建议写进子 Agent 的 prompt。
+
+子 Agent 完成后运行 `python scripts/skill_step.py next "<WORK_DIR>"`：
+- 输出 `ERROR:` 时，把错误信息发给同一个子 Agent（或重新启动一个），让它重写 `response.json`。
+- 有 high 或 medium 级别问题时，输出 `READY:` 进入 `revise` 步骤：按 system.md 和 `user.json` 里的 `critique` 做第二轮修改，流程与其他 markdown 步骤相同。
+- 没有需要处理的问题时直接输出 `DONE:`。
+
+当前环境无法启动子 Agent 时（例如 Codex 关闭了 `agents.enabled`），自己完成审稿任务，并告知用户这次审稿不是独立进行的。
 
 ### 第 3 步：完成
 
@@ -75,7 +96,8 @@ python scripts/skill_step.py init "<source>" "$WORK_DIR" [--style NAME] [--angle
    - 文章标题
    - 文件路径：`<目录>/article.md`（公开版）、`<目录>/article-cited.md`（带引用）
    - 预览：`<目录>/wechat.html`
-   - 核对材料：`<目录>/review.md`
+   - 核对材料：`<目录>/review.md`（含审稿评分和意见）
+   - 审稿评分，以及第二轮修改是否已应用
 
 ## 重要注意事项
 
