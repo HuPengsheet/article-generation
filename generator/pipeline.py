@@ -58,6 +58,11 @@ def generate(
     progress("合并材料与配图")
     evidence = merge_materials(materials, directory)
     evidence["figures"].extend(prepare_illustrations(illustrations, directory))
+    if not evidence["figures"]:
+        write_json(directory / "materials.json", evidence)
+        raise ValueError(
+            "材料未取得可用配图，请先补充原图或已核实的机制示意图；不能生成无图完成稿。"
+        )
     facts, limitations = extract_evidence(evidence["sections"], llm, progress)
     evidence["limitations"].extend(limitations)
     evidence.update(

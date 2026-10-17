@@ -318,6 +318,8 @@ reference_articles 是这个公众号已发表的完整文章，是本文的风�
 - 章节和子节标题与 outline 一致，可以微调措辞。
 - outline 每节选定的图片必须全部出现在该节：先说明这张图要回答什么问题、看哪里，再放图，图后结合数据解释结论。
 - 图片格式：![图N：简短主题](figures/xxx.png)，下一段是独立的斜体图注 *图N：……*。图注先交代图的内容，再解释机制或结论，以及容易误读的口径，长度参考 reference_articles。原图编号只用于 origin 为 latex/arxiv_html 的图；只有 origin=author_diagram 的图才能称自绘。
+- 图注保留来源 source_id、已有原图编号及 panels 子图说明，未匹配图注时如实说明，不能猜测图中细节。自绘图须注明 assumptions，假设不能成为实测数据。
+- 正文必须实际使用相关配图，不能交付纯文字稿；没有提供素材时不虚构图片路径。
 - 加粗写成 **内容**：正文，标点放在加粗标记之外。
 
 include_summary=true 时按 outline 写收束章节；false 时不写总结。
@@ -385,6 +387,8 @@ def validate_generic_outline(outline, facts, figures, targets=None):
             f"写作大纲只选了 {len(chosen)} 张图，至少需要 {minimum} 张；"
             "请为架构、算法、主实验和消融等章节分配清单中的原图。"
         )
+    if not any(section["figures"] for section in sections):
+        raise ValueError("写作大纲未选择配图，不能生成无图完成稿。")
     return outline
 
 
@@ -422,6 +426,8 @@ def validate_generic_article(article, facts, figures, outline=None, targets=None
             f"正文约 {length} 字，少于要求的 {minimum} 字；"
             "请回到 source_blocks 展开机制、实验条件和取舍，不要用重复内容凑字数。"
         )
+    if not article_images(article):
+        raise ValueError("文章缺少实际配图，已停止保存无图稿。")
     return article
 
 

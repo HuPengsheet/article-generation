@@ -101,6 +101,8 @@ python scripts/skill_step.py init "<source>" "$WORK_DIR" [--style NAME] [--angle
 
 ## 重要注意事项
 
+- 不得交付无图完成稿。先提取相关原图；无法取得图片时保留材料并报告原因，不能静默退化为纯文字稿。
+- 必须通过标准导出器生成预览，不手写简化 HTML。确认复制正文、复制标题按钮存在，正文图片嵌入后可一并复制。
 - **evidence 步骤**可能有多个 chunk（见 meta.json 的 chunk/total_chunks），每个 chunk 都是独立的一轮生成
 - **user.json 可能很大**（100KB+），始终用 Read 工具分段读取，不要用 cat
 - **配图和篇幅是硬性要求**：大纲需按 targets.min_figures 分配原图；正文需放入大纲选定的全部图片，正文字数不少于 targets.min_chars

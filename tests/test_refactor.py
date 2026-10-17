@@ -106,6 +106,11 @@ def image(path):
     return path
 
 
+def illustrated_markdown(path, text):
+    image(path.parent / "method.png")
+    path.write_text(text + "\n\n![Mechanism](method.png)", encoding="utf-8")
+
+
 def pdf(path):
     with pymupdf.open() as doc:
         page = doc.new_page()
@@ -261,8 +266,8 @@ def test_url_pdf_sniffing_and_unknown_content(tmp_path, monkeypatch):
 
 def test_generator_cli_json_merge_batch_and_skip_records(tmp_path, monkeypatch):
     first, second = tmp_path / "first.md", tmp_path / "second.md"
-    first.write_text("# First\n\nFirst source fact.", encoding="utf-8")
-    second.write_text("# Second\n\nSecond source fact.", encoding="utf-8")
+    illustrated_markdown(first, "# First\n\nFirst source fact.")
+    illustrated_markdown(second, "# Second\n\nSecond source fact.")
     manifest = tmp_path / "selected.json"
     manifest.write_text(
         json.dumps(
@@ -285,7 +290,7 @@ def test_generator_cli_json_merge_batch_and_skip_records(tmp_path, monkeypatch):
 
 def test_generator_batch_continues_after_source_failure(tmp_path, monkeypatch):
     good = tmp_path / "good.md"
-    good.write_text("# Good\n\nUseful source.", encoding="utf-8")
+    illustrated_markdown(good, "# Good\n\nUseful source.")
     monkeypatch.setattr(cli, "LLM", GenericModel)
     assert (
         cli.main(
@@ -443,7 +448,7 @@ def test_url_html_declared_charset_is_not_decoded_twice(tmp_path, monkeypatch):
 def test_batch_damaged_pdf_does_not_abort_other_articles(tmp_path, monkeypatch):
     broken, good = tmp_path / "broken.pdf", tmp_path / "good.md"
     broken.write_bytes(b"%PDF-1.7\ntruncated")
-    good.write_text("# Good\n\nUseful fact.", encoding="utf-8")
+    illustrated_markdown(good, "# Good\n\nUseful fact.")
     monkeypatch.setattr(cli, "LLM", GenericModel)
     assert (
         cli.main([str(broken), str(good), "--batch", "--output-dir", str(tmp_path / "output")]) == 1
@@ -524,7 +529,7 @@ def test_lint_uses_style_banned_phrases():
 
 def test_pipeline_with_style(tmp_path):
     md = tmp_path / "paper.md"
-    md.write_text("# Mechanism\n\nConcrete factual description.", encoding="utf-8")
+    illustrated_markdown(md, "# Mechanism\n\nConcrete factual description.")
     material = MarkdownSource().extract(md, tmp_path / "source")
     output = tmp_path / "article"
     model = GenericModel()
@@ -551,7 +556,7 @@ def test_pipeline_with_style(tmp_path):
 
 def test_cli_style_parameter(tmp_path, monkeypatch):
     md = tmp_path / "notes.md"
-    md.write_text("# Notes\n\nA measured fact.", encoding="utf-8")
+    illustrated_markdown(md, "# Notes\n\nA measured fact.")
     monkeypatch.setattr(cli, "LLM", GenericModel)
     assert (
         cli.main([str(md), "--style", "ai-infra-deep", "--output-dir", str(tmp_path / "out")]) == 0

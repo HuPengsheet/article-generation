@@ -225,6 +225,9 @@ def cmd_init(args):
 
     # Merge materials (single source)
     evidence = merge_materials([material], work_dir)
+    if not evidence["figures"]:
+        write_json(work_dir / "materials.json", evidence)
+        raise ValueError("未取得可用配图，保留材料；请先提取原图，不能生成无图完成稿。")
 
     # Load style
     style = load_style(args.style)

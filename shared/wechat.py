@@ -83,6 +83,26 @@ def preview(
 <body><header><nav><button id="copy">复制正文到公众号</button><button id="copy-title">复制标题</button><a class="download" href="__DOWNLOAD__" download>下载 Markdown</a><a class="download" href="__NOTES__">查看证据笔记</a>__IMAGES__</nav><p class="hint">复制正文后，粘贴到公众号正文编辑区；标题请单独复制。图片会嵌入复制内容；若公众号未保留图片，请下载图片包按图注顺序上传。公众号编辑器可能调整排版。</p><p id="status" role="status">正文预览</p></header><main><h1 id="title">__TITLE__</h1><section id="article" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif;color:#273244;line-height:1.85;max-width:100%;">__ARTICLE__</section></main>
 <script>
 const status = document.getElementById('status');
+async function writeClipboard(html, plain, node) {
+ try {
+  if (!navigator.clipboard) throw new Error('fallback');
+  if (html === null) {
+   await navigator.clipboard.writeText(plain);
+  } else {
+   if (!window.ClipboardItem) throw new Error('fallback');
+   await navigator.clipboard.write([new ClipboardItem({'text/html':new Blob([html],{type:'text/html'}),'text/plain':new Blob([plain],{type:'text/plain'})})]);
+  }
+ } catch (error) {
+  const selection = window.getSelection(), saved = [];
+  for(let i=0;i<selection.rangeCount;i++) saved.push(selection.getRangeAt(i).cloneRange());
+  const range = document.createRange(); range.selectNodeContents(node); selection.removeAllRanges(); selection.addRange(range);
+  const handler = event => {event.preventDefault();if(html !== null) event.clipboardData.setData('text/html',html);event.clipboardData.setData('text/plain',plain);};
+  document.addEventListener('copy', handler);
+  let success;
+  try {success = document.execCommand('copy');} finally {document.removeEventListener('copy',handler);selection.removeAllRanges();saved.forEach(r=>selection.addRange(r));}
+  if(!success) throw new Error('复制失败，请手动选择正文复制。');
+ }
+}
 async function copyRich() {
  const node = document.getElementById('article'), clone = node.cloneNode(true), plain = node.innerText;
  status.textContent='正在准备正文与图片…';
@@ -95,23 +115,11 @@ async function copyRich() {
   img.src=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(blob);});
  }));
  const html = clone.outerHTML;
- try {
-  if (!navigator.clipboard || !window.ClipboardItem) throw new Error('fallback');
-  await navigator.clipboard.write([new ClipboardItem({'text/html':new Blob([html],{type:'text/html'}),'text/plain':new Blob([plain],{type:'text/plain'})})]);
- } catch (error) {
-  const selection = window.getSelection(), saved = [];
-  for(let i=0;i<selection.rangeCount;i++) saved.push(selection.getRangeAt(i).cloneRange());
-  const range = document.createRange(); range.selectNodeContents(node); selection.removeAllRanges(); selection.addRange(range);
-  const handler = event => {event.preventDefault();event.clipboardData.setData('text/html',html);event.clipboardData.setData('text/plain',plain);};
-  document.addEventListener('copy', handler);
-  let success;
-  try {success = document.execCommand('copy');} finally {document.removeEventListener('copy',handler);selection.removeAllRanges();saved.forEach(r=>selection.addRange(r));}
-  if(!success) throw new Error('复制失败，请在浏览器中打开页面后重试。');
- }
+ await writeClipboard(html, plain, node);
  status.textContent=clone.querySelector('img')?'正文与图片已复制。粘贴后请检查图片；若图片未保留，请下载图片包上传。':'正文已复制，请粘贴到公众号正文编辑区。';
 }
 document.getElementById('copy').onclick=()=>copyRich().catch(e=>status.textContent=e.message);
-document.getElementById('copy-title').onclick=async()=>{try{await navigator.clipboard.writeText(document.getElementById('title').textContent);status.textContent='标题已复制。';}catch(e){status.textContent='标题复制失败，请手动选择标题复制。';}};
+document.getElementById('copy-title').onclick=async()=>{try{const node=document.getElementById('title');await writeClipboard(null,node.textContent,node);status.textContent='标题已复制。';}catch(e){status.textContent=e.message;}};
 </script></body></html>"""
     return (
         template.replace("__TITLE__", escape(title))

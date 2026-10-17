@@ -1,13 +1,16 @@
 """Publish clean Markdown and portable, self-contained browser preview assets."""
 
+import base64
 import json
 import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import pymupdf
+
 from generator.evidence import publication_copy
-from generator.writer import ASPECTS
+from generator.writer import ASPECTS, article_images
 from shared.wechat import preview
 
 
@@ -115,10 +118,25 @@ def _image_path(directory, filename):
 def save_output(article, evidence, work_dir):
     directory = Path(work_dir)
     directory.mkdir(parents=True, exist_ok=True)
+    used_images = article_images(article)
+    if not used_images:
+        raise ValueError("正文缺少实际配图，不能交付无图完成稿。")
+    allowed = {figure["file"] for figure in evidence["figures"]}
+    if any(filename not in allowed for filename in used_images):
+        raise ValueError("正文引用了配图清单外图片，已停止导出。")
     images = {}
     for figure in evidence["figures"]:
         filename = figure["file"]
         images[filename] = _image_path(directory, filename)
+        try:
+            with pymupdf.open(images[filename]) as image:
+                image[0].get_pixmap()
+        except Exception as error:
+            raise ValueError(f"配图无法解码：{filename}，已停止导出。") from error
+    image_urls = {
+        filename: "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+        for filename, path in images.items()
+    }
     (directory / "article-cited.md").write_text(article, encoding="utf-8")
     published, citations = publication_copy(article)
     evidence["citations"] = citations
@@ -128,7 +146,11 @@ def save_output(article, evidence, work_dir):
     # Relative PNG addresses work when served with `python -m http.server`.
     (directory / "wechat.html").write_text(
         preview(
-            published, download_url="article.md", notes_url="review.md", images_url="images.zip"
+            published,
+            download_url="article.md",
+            notes_url="review.md",
+            images_url="images.zip",
+            image_urls=image_urls,
         ),
         encoding="utf-8",
     )

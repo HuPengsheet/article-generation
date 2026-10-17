@@ -153,6 +153,8 @@ python scripts/extract_template.py template --style ai-infra-deep
 
 ### 配图与解析边界
 
+生成与交付必须包含相关配图：素材为空、大纲未选图、正文漏图或图片无法解码时停止，不把纯文字稿标记为完成。先补充原图或标明假设的机制示意图后重试，不用无关图片凑数。
+
 HTML/Markdown 的相对图片地址按原网页或本地文件位置解析，支持图片下载及规范化为 PNG。配图失败会记录局限。独立 PDF 仅提取嵌入位图，不能自动恢复所有矢量图、图注或多面板关系；扫描 PDF 未接入 OCR，可读取文字不足时停止生成。
 
 arXiv 专用适配器复用已有安全源码解包、递归 input/include、figure/wrapfigure、分图图注与多面板合并。不会执行 TeX；拒绝越界路径、链接与特殊文件。源码缺失或宏绘图无法提取时，固定版本官方 HTML 补全配图，保留原编号和分图说明。特殊宏或布局仍需人工核对。
@@ -182,6 +184,8 @@ python -m http.server 8001 --bind 127.0.0.1 --directory data/articles
 
 打开 `http://127.0.0.1:8001/<本次运行>/wechat.html`，复制正文粘贴到公众号，标题单独复制。批量文章在各自 `article-NNN/` 下。实际公众号可能调整图片或样式，可下载图片包手动上传。
 
+导出预览提供“复制正文到公众号”和“复制标题”按钮，图片内嵌为 data URL，直接打开本地 HTML 也无需从本地路径抓取图片即可复制图文。剪贴板 API 不可用时尝试传统复制方式；目标编辑器是否保留图片仍需核对。
+
 Python 调用：
 
 ```python
@@ -197,6 +201,52 @@ print(result.markdown)
 ```
 
 编程调用前需自行加载 `.env` 或配置环境变量。`generate()` 可接收 `illustrations=[{"path":"diagram.png","caption":"自绘示意","assumptions":"机制示意，非实验结果"}]`；自绘图须有实际 PNG 和说明，不自动调用图片生成服务。
+
+### 存入微信公众号草稿箱（本机 CLI）
+
+在本机 `.env` 配置 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 和默认署名
+`WECHAT_ACCOUNT_NAME`。`.env` 已被 Git 忽略；不要把凭据放进正文、预览或上传记录。
+使用前在公众号后台配置实际请求出口的 IP 白名单，并确认素材与草稿接口权限。
+
+```bash
+# 检查凭据、IP 白名单与草稿读取权限；不上传文章
+python -m scripts.wechat_draft check
+
+# 本地预检，无需微信凭据、不访问微信；生成待上传 JSON 和标准图文预览
+python -m scripts.wechat_draft dry-run data/articles/my-article \
+  --cover cover.png --title "适合公众号的短标题"
+
+# 上传正文图片与封面，创建草稿，再回读核对
+python -m scripts.wechat_draft upload data/articles/my-article \
+  --cover cover.png --title "适合公众号的短标题" \
+  --author "作者名" --digest "摘要" --source-url "https://example.com/paper"
+
+# 有修改时更新同一份草稿，参数格式与 upload 相同
+python -m scripts.wechat_draft update data/articles/my-article \
+  --cover cover.png --title "修改后的短标题"
+
+# 仅回读已有草稿，核对中文正文、标题、封面和图片，不重新上传
+python -m scripts.wechat_draft verify data/articles/my-article \
+  --cover cover.png --title "当前草稿标题"
+```
+
+程序读取公开版 `article.md`，复用 `shared.wechat.render` 排版，不上传预览网页的按钮
+或内部引文。正文与封面只接受文章目录内的 PNG/JPEG；超出上传大小限制时压缩上传副本，
+保留原图。标题采用本地保守上限32字符、署名16字符、摘要120字符，超限时明确报错，
+不自动截断。外部图片需先下载到文章目录。
+
+`dry-run` 产物是 `wechat-payload-preview.json`（图片 URL 和封面 ID 为占位值）及
+`wechat-draft-preview.html`。上传记录 `wechat-draft.json` 保存账号 AppID、图片缓存和
+草稿 ID，不保存 AppSecret 或 access_token。首次创建成功后再次 `upload` 会停止，
+需用 `update` 修改同一草稿。更新命令未指定的可选字段使用默认值，请在更新时一并传入
+希望保留的署名、摘要、原文地址。
+
+创建请求中断或响应不确定时，不自动重试，防止重复创建；先到公众号草稿箱核对。
+创建成功但回读失败时仍保留草稿 ID，可核对后使用 `update` 重试。程序没有发表或群发接口，
+保存结果请在公众号后台的草稿箱查看，不将草稿 ID 拼接为公开文章链接。
+如果只是回读检查失败，可先运行 `verify`；它不会修改远端草稿。回读统一按 UTF-8 解码，
+图片校验接受微信将同一图片的 HTTP 地址改为 HTTPS、原图 `/0` 改为展示规格 `/640`，
+同时仍检查图片标识、数量、顺序与正文文字完整性。
 
 团队 JSON 为 `{"verified":true,"description":"经核实的团队背景","sources":[{"title":"机构页面","url":"https://..."}]}`。程序校验格式，不自动证明团队声望或背景真实性。
 

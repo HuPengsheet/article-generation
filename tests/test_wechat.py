@@ -1,3 +1,9 @@
+import re
+import shutil
+import subprocess
+
+import pytest
+
 from generator.writer import lint_article
 from shared.wechat import preview, render
 
@@ -51,6 +57,71 @@ def test_api_image_mapping_preserves_query_and_encodes_ampersands():
         },
     )
     assert 'src="/api/article/image?batch=2026-10-07&amp;id=2610.00001&amp;name=method.png"' in html
+
+
+def test_local_preview_embeds_images_and_supports_title_clipboard_fallback():
+    html = preview(
+        "# 标题\n\n![方法](figures/method.png)",
+        image_urls={"figures/method.png": "data:image/png;base64,test"},
+    )
+    assert 'src="data:image/png;base64,test"' in html
+    assert "if(url.protocol==='data:') return" in html
+    assert "await writeClipboard(null,node.textContent,node)" in html
+    assert "document.execCommand('copy')" in html
+
+
+@pytest.mark.parametrize("clipboard_mode", ["modern", "denied", "unavailable"])
+def test_copy_actions_keep_embedded_images_and_title_separate(tmp_path, clipboard_mode):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is needed to exercise clipboard JavaScript")
+    html = preview("# 唯一标题\n\n正文。")
+    script = re.search(r"<script>(.*?)</script>", html, re.S)[1]
+    path = tmp_path / "clipboard.js"
+    path.write_text(script, encoding="utf-8")
+    harness = r"""
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const mode = process.argv[2], source = fs.readFileSync(process.argv[1], 'utf8');
+let copied, listener, fetches = 0, fallbackCalls = 0;
+const image = {getAttribute:()=> 'data:image/png;base64,embedded'};
+const clone = {querySelectorAll:()=>[image],querySelector:()=>image,outerHTML:'<section>正文<img src="data:image/png;base64,embedded"></section>'};
+const article = {innerText:'正文',cloneNode:()=>clone};
+const title = {textContent:'唯一标题'};
+const nodes = {article,title,status:{},copy:{},'copy-title':{}};
+const selection = {rangeCount:0,removeAllRanges(){},addRange(){}};
+const document = {
+ getElementById:id=>nodes[id],createRange:()=>({selectNodeContents(){}}),
+ addEventListener:(name,fn)=>{listener=fn;},removeEventListener:()=>{listener=null;},
+ execCommand:()=>{fallbackCalls++;copied={};listener({preventDefault(){},clipboardData:{setData:(k,v)=>{copied[k]=v;}}});return true;}
+};
+const navigator = mode==='unavailable'?{}:{clipboard:{
+ write:async items=>{if(mode==='denied')throw Error('denied');copied={};for(const [k,v]of Object.entries(items[0].data))copied[k]=await v.text();},
+ writeText:async text=>{if(mode==='denied')throw Error('denied');copied={'text/plain':text};}
+}};
+const window = {getSelection:()=>selection,ClipboardItem:function(data){this.data=data;}};
+const context = vm.createContext({document,navigator,window,ClipboardItem:window.ClipboardItem,Blob,URL,location:{origin:'null'},fetch:()=>{fetches++;throw Error('File image must not be fetched');}});
+vm.runInContext(source,context);
+(async()=>{
+ await nodes.copy.onclick();
+ assert.equal(fetches,0);
+ assert.ok(copied['text/html'].includes('data:image/png;base64,embedded'));
+ assert.ok(!copied['text/html'].includes('唯一标题'));
+ assert.equal(copied['text/plain'],'正文');
+ assert.ok(nodes.status.textContent.includes('正文与图片已复制'));
+ await nodes['copy-title'].onclick();
+ assert.deepEqual(copied,{'text/plain':'唯一标题'});
+ assert.equal(nodes.status.textContent,'标题已复制。');
+ assert.equal(fallbackCalls,mode==='modern'?0:2);
+ assert.equal(listener,undefined===listener?undefined:null);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+    subprocess.run(
+        [node, "-e", harness, str(path), clipboard_mode],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
 
 
 def test_caption_has_smaller_gray_inline_style_but_body_does_not():
